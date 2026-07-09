@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+
+# Test-Umgebung
+run/
+
+# Editoren
+.eclipse/
+.vscode/
+.idea/
+*.iml
+
+# System
+.DS_Store
+Thumbs.db
