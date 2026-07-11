@@ -7,4 +7,4 @@ A client mod for displaying LabyMod cosmetics without the LabyMod client. Dynami
 
 ### Deutsch
 
-Ein Client-Mod zum Anzeigen von LabyMod-Cosmetics ohne LabyMod-Client. Dynamisches Laden von geo, animation, Texturen und Farben über die API. Cape & Flügel funktionsfähig. Lernprojekt, nicht mit Laby verbunden
+Ein Client-Mod zum Anzeigen von LabyMod-Cosmetics ohne LabyMod-Client. Dynamisches Laden von geo, animation, Texturen und Farben über die API. Cape & Flügel funktionsfähig. Lernprojekt, keine Zusammenarbeit mit Laby!
