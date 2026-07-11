@@ -38,7 +38,7 @@ public class LabyCosmeticsMod {
         for (var skin : event.getSkins()) {
             var renderer = event.getSkin(skin);
             if (renderer instanceof net.minecraft.client.renderer.entity.player.PlayerRenderer playerRenderer) {
-playerRenderer.addLayer(new LabyCapeLayer(playerRenderer));
+            playerRenderer.addLayer(new LabyCapeLayer(playerRenderer));
             playerRenderer.addLayer(new com.example.labycosmetics.render.WingRenderLayer(playerRenderer));
             LOGGER.info("[LabyCosmetics] Cape-Layer fuer Skin '{}' registriert.", skin);
             }

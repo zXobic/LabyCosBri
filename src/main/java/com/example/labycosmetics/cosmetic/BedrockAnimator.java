@@ -57,9 +57,10 @@ public final class BedrockAnimator {
             float[] rot = sample(entry.getValue(), t);
 
             // Grad -> Radiant, mit Y/Z-Spiegelung passend zum gebauten Modell.
+            // Konsistent zum Model-Builder: X und Y negieren, Z bleibt.
             part.xRot = -rot[0] * DEG_TO_RAD;
-            part.yRot = rot[1] * DEG_TO_RAD;
-            part.zRot = -rot[2] * DEG_TO_RAD;
+            part.yRot = -rot[1] * DEG_TO_RAD;
+            part.zRot = rot[2] * DEG_TO_RAD;
         }
     }
 

@@ -6,10 +6,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 /**
- * Parst eine LabyMod geo.json (Bedrock-Format 1.12.0) in unsere schlanke
- * {@link BedrockGeometry}-Struktur.
- * <p>
- * Gson ist bereits Teil von Minecraft/NeoForge, daher keine extra Dependency.
+ * Parst eine LabyMod geo.json (Bedrock-Format) in unsere
+ * {@link BedrockGeometry}-Struktur - inklusive Bone- und Cube-Rotationen
+ * sowie Cube-Pivots.
  */
 public final class BedrockGeometryParser {
 
@@ -53,6 +52,9 @@ public final class BedrockGeometryParser {
             if (boneObj.has("pivot")) {
                 bone.pivot = toFloatArray(boneObj.getAsJsonArray("pivot"));
             }
+            if (boneObj.has("rotation")) {
+                bone.rotation = toFloatArray(boneObj.getAsJsonArray("rotation"));
+            }
 
             if (boneObj.has("cubes")) {
                 for (JsonElement cubeEl : boneObj.getAsJsonArray("cubes")) {
@@ -70,6 +72,16 @@ public final class BedrockGeometryParser {
                     }
                     if (cubeObj.has("mirror")) {
                         cube.mirror = cubeObj.get("mirror").getAsBoolean();
+                    }
+                    if (cubeObj.has("rotation")) {
+                        cube.hasRotation = true;
+                        cube.rotation = toFloatArray(cubeObj.getAsJsonArray("rotation"));
+                        // Cube-Pivot: falls angegeben, sonst Fallback auf origin-Mitte
+                        if (cubeObj.has("pivot")) {
+                            cube.pivot = toFloatArray(cubeObj.getAsJsonArray("pivot"));
+                        } else {
+                            cube.pivot = cube.origin.clone();
+                        }
                     }
 
                     bone.cubes.add(cube);

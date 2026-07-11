@@ -33,6 +33,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         super(parent);
     }
 
+    @SuppressWarnings("null")
     @Override
     public void render(PoseStack poseStack, MultiBufferSource buffer, int packedLight,
                        AbstractClientPlayer player, float limbSwing, float limbSwingAmount,
@@ -72,7 +73,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         }
 
         // --- Animation anwenden (falls vorhanden) ---
-        BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
+        /*BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
         if (anim != null) {
             BedrockAnimation.Clip clip = anim.getClip("Idle");
             if (clip != null) {
@@ -84,17 +85,18 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                 float timeSeconds = eased * clipLength;
                 BedrockAnimator.apply(built.root(), clip, timeSeconds, built.bonesByName());
             }
-        }
+        }*/
 
         // --- Rendern ---
         poseStack.pushPose();
 
         if (player.isCrouching()) {
-            poseStack.translate(0.0D, 0.21D, -0.07D);
+            poseStack.translate(0.0D, 0.21D, 0.0D);
             poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
         }
 
-        poseStack.translate(0.0D, 0.0625D, 0.02D);
+        poseStack.translate(0.0D, 0.0625D, 0.01D);
+
 
         float scale = meta.scale();
         if (scale != 1.0F) {

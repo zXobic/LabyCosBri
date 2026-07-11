@@ -12,27 +12,27 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Wandelt eine geparste {@link BedrockGeometry} in einen fertig "gebackenen"
- * Minecraft-{@link ModelPart} um (die Wurzel, deren Kinder man einzeln fuer
- * die Animation ansprechen kann).
+ * Wandelt eine geparste {@link BedrockGeometry} in einen fertig gebackenen
+ * Minecraft-{@link ModelPart} um - jetzt inklusive Bone- und Cube-Rotationen.
  *
- * <h3>Wichtige Koordinaten-Unterschiede Bedrock -> Minecraft</h3>
+ * <h3>Wie Rotationen umgesetzt werden</h3>
  * <ul>
- *   <li>Bedrock-Y zeigt nach OBEN, Minecraft-Model-Y nach UNTEN.
- *       Wir spiegeln daher Y (negieren) bei Pivot und Origin.</li>
- *   <li>Bedrock-Origin ist die Ecke mit den kleinsten Koordinaten;
- *       nach der Y-Spiegelung wird daraus die andere Ecke, deshalb muss
- *       bei der addBox-Position die (gespiegelte) Y-Groesse beruecksichtigt
- *       werden.</li>
- *   <li>ModelPart-Positionen sind relativ zum Pivot des Eltern-Bones.</li>
+ *   <li><b>Bone-Rotation:</b> wird direkt in die PartPose des Bones gelegt
+ *       (PartPose kann Position UND Rotation).</li>
+ *   <li><b>Cube-Rotation:</b> Minecraft-Cubes koennen selbst nicht rotieren.
+ *       Wir legen daher fuer jeden rotierten Cube einen eigenen Zwischen-Bone
+ *       an, der am Cube-Pivot sitzt und die Rotation traegt; der Cube haengt
+ *       dann rotationsfrei darunter.</li>
  * </ul>
  *
- * Hinweis: Dieser Builder deckt den von den LabyMod-Wings genutzten
- * Funktionsumfang ab (Bones mit pivot, cubes mit origin/size/uv/mirror,
- * flache Cubes mit einer 0-Dimension). Rotationen auf Bone-Ebene im geo.json
- * kommen bei den Wings nicht vor und werden hier (noch) ignoriert.
+ * <h3>Koordinaten</h3>
+ * Bedrock-Y zeigt nach oben, Minecraft-Model-Y nach unten -> wir spiegeln Y.
+ * Rotationswinkel um X bleiben, um Y und Z kehren sich durch die Spiegelung
+ * das Vorzeichen um (analog zum Animator).
  */
 public final class BedrockModelBuilder {
+
+    private static final float DEG_TO_RAD = (float) (Math.PI / 180.0);
 
     private BedrockModelBuilder() {
     }
@@ -41,12 +41,7 @@ public final class BedrockModelBuilder {
         MeshDefinition mesh = new MeshDefinition();
         PartDefinition root = mesh.getRoot();
 
-        // Wir muessen die PartDefinitions in Hierarchie-Reihenfolge anlegen:
-        // ein Kind kann erst hinzugefuegt werden, wenn sein Parent existiert.
         Map<String, PartDefinition> defs = new HashMap<>();
-
-        // Mehrfach durchlaufen, bis alle Bones platziert sind (einfacher als
-        // topologisches Sortieren und fuer die kleine Bone-Zahl unkritisch).
         boolean progress = true;
         boolean[] placed = new boolean[geo.bones.size()];
         int remaining = geo.bones.size();
@@ -63,7 +58,6 @@ public final class BedrockModelBuilder {
                 } else {
                     parentDef = defs.get(bone.parent);
                     if (parentDef == null) {
-                        // Parent noch nicht angelegt -> spaeter erneut versuchen
                         continue;
                     }
                 }
@@ -83,50 +77,91 @@ public final class BedrockModelBuilder {
     private static PartDefinition addBone(PartDefinition parentDef,
                                           BedrockGeometry.Bone bone,
                                           BedrockGeometry geo) {
-        CubeListBuilder cubes = CubeListBuilder.create();
-
-        // Pivot des Parents ermitteln, denn ModelPart-Positionen sind
-        // relativ zum Eltern-Pivot.
         float[] parentPivot = findParentPivot(bone, geo);
 
-        for (BedrockGeometry.Cube cube : bone.cubes) {
-            addCube(cubes, cube, bone);
-        }
-
-        // Position dieses Bones relativ zum Parent (Y gespiegelt).
+        // Position relativ zum Parent-Pivot (Y gespiegelt).
         float px = bone.pivot[0] - parentPivot[0];
-        float py = -(bone.pivot[1] - parentPivot[1]); // Y-Spiegelung
+        float py = -(bone.pivot[1] - parentPivot[1]);
         float pz = bone.pivot[2] - parentPivot[2];
 
-        return parentDef.addOrReplaceChild(
+        // Bone-Rotation (Grad -> Radiant). Korrekte Bedrock->MC-Umrechnung
+        // bei Y-gespiegelter Position: X und Y negieren, Z bleibt.
+        float rx = -bone.rotation[0] * DEG_TO_RAD;
+        float ry = bone.rotation[1] * DEG_TO_RAD;
+        float rz = bone.rotation[2] * DEG_TO_RAD;
+
+        // Cubes OHNE eigene Rotation direkt in diesen Bone legen.
+        CubeListBuilder plainCubes = CubeListBuilder.create();
+        boolean hasPlain = false;
+        for (BedrockGeometry.Cube cube : bone.cubes) {
+            if (!cube.hasRotation) {
+                addCube(plainCubes, cube, bone.pivot);
+                hasPlain = true;
+            }
+        }
+
+        PartDefinition def = parentDef.addOrReplaceChild(
                 bone.name,
+                hasPlain ? plainCubes : CubeListBuilder.create(),
+                PartPose.offsetAndRotation(px, py, pz, rx, ry, rz));
+
+        // Cubes MIT eigener Rotation bekommen je einen eigenen Kind-Bone,
+        // der am Cube-Pivot sitzt und die Cube-Rotation traegt.
+        int rotIndex = 0;
+        for (BedrockGeometry.Cube cube : bone.cubes) {
+            if (cube.hasRotation) {
+                addRotatedCube(def, cube, bone.pivot, bone.name + "_rc" + rotIndex);
+                rotIndex++;
+            }
+        }
+
+        return def;
+    }
+
+    private static void addRotatedCube(PartDefinition parentDef,
+                                       BedrockGeometry.Cube cube,
+                                       float[] bonePivot,
+                                       String childName) {
+        // Zwischen-Bone sitzt am Cube-Pivot (relativ zum Bone-Pivot, Y gespiegelt).
+        float px = cube.pivot[0] - bonePivot[0];
+        float py = -(cube.pivot[1] - bonePivot[1]);
+        float pz = cube.pivot[2] - bonePivot[2];
+
+        // Cube-Rotation: gleiche Umrechnung wie Bone (X,Y negieren, Z bleibt).
+        float rx = -cube.rotation[0] * DEG_TO_RAD;
+        float ry = cube.rotation[1] * DEG_TO_RAD;
+        float rz = cube.rotation[2] * DEG_TO_RAD;
+
+        CubeListBuilder cubes = CubeListBuilder.create();
+        // Innerhalb des Zwischen-Bones ist der Cube relativ zum Cube-Pivot.
+        addCube(cubes, cube, cube.pivot);
+
+        parentDef.addOrReplaceChild(
+                childName,
                 cubes,
-                PartPose.offset(px, py, pz));
+                PartPose.offsetAndRotation(px, py, pz, rx, ry, rz));
     }
 
     private static void addCube(CubeListBuilder cubes,
                                 BedrockGeometry.Cube cube,
-                                BedrockGeometry.Bone bone) {
+                                float[] referencePivot) {
         float sx = cube.size[0];
         float sy = cube.size[1];
         float sz = cube.size[2];
 
-        // Position der addBox relativ zum Bone-Pivot.
-        // Bedrock: origin ist die minimale Ecke. Nach Y-Spiegelung wird die
-        // obere Kante zu (origin_y + size_y) im negierten Raum.
-        float x = cube.origin[0] - bone.pivot[0];
-        float y = -(cube.origin[1] + sy) + bone.pivot[1]; // Y gespiegelt inkl. Hoehe
-        float z = cube.origin[2] - bone.pivot[2];
+        // Cube-Position relativ zum Referenz-Pivot (Bone-Pivot oder Cube-Pivot),
+        // Y gespiegelt inkl. Hoehe.
+        float x = cube.origin[0] - referencePivot[0];
+        float y = -(cube.origin[1] + sy) + referencePivot[1];
+        float z = cube.origin[2] - referencePivot[2];
 
         cubes.texOffs((int) cube.uv[0], (int) cube.uv[1]);
         if (cube.mirror) {
             cubes.mirror();
         }
-
         cubes.addBox(x, y, z, sx, sy, sz, CubeDeformation.NONE);
-
         if (cube.mirror) {
-            cubes.mirror(false); // zuruecksetzen fuer nachfolgende Cubes
+            cubes.mirror(false);
         }
     }
 
