@@ -28,6 +28,10 @@ import java.util.List;
  * inklusive Flatter-Animation und pro-Federreihe-Faerbung aus der userdata.
  */
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
+    // TEST: Z-Versatz für BACK-Wings (nach hinten = negativ). Justieren.
+    private static final float TEST_BACK_Z = 0.15F;
+
+    private static boolean DEBUG_BONES = true;
 
     public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
@@ -73,19 +77,36 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         }
 
         // --- Animation anwenden (falls vorhanden) ---
-        /*BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
+        // WICHTIG: Manche Cosmetics (z.B. 963) haben zustandsgesteuerte
+        // Animationen (LabyMod -t Befehl mit IDLE/MOVING/SNEAKING), die wir
+        // nicht korrekt interpretieren koennen. Solche Animationen klappen
+        // Teile ein/aus. Wir wenden Animationen daher nur an, wenn der Clip
+        // NICHT zustandsgesteuert ist.
+        BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
         if (anim != null) {
-            BedrockAnimation.Clip clip = anim.getClip("Idle");
-            if (clip != null) {
+            BedrockAnimation.Clip clip = anim.findClipBySuffix("idle");
+            if (clip != null && !clip.stateControlled) {
                 float rawTime = (player.tickCount + partialTicks) / 20.0F;
                 float clipLength = clip.lengthSeconds > 0f ? clip.lengthSeconds : 6.0F;
-                float reversed = clipLength - (rawTime % clipLength);
-                float phase = reversed / clipLength;
-                float eased = easeWingBeat(phase);
-                float timeSeconds = eased * clipLength;
+                float phase = (rawTime % clipLength) / clipLength;
+                float timeSeconds = phase * clipLength;
                 BedrockAnimator.apply(built.root(), clip, timeSeconds, built.bonesByName());
             }
-        }*/
+        }
+
+        // DEBUG: finale Rotation der Schluessel-Bones (Fluegelansatz) ausgeben.
+        if (DEBUG_BONES) {
+            DEBUG_BONES = false;
+            for (String key : new String[]{"color_0_c3", "color_0_c3_rc0", "color_0_b3", "color_0_b3_rc0", "color_0_b3_rc1"}) {
+                var p = built.bonesByName().get(key);
+                if (p != null) {
+                    System.out.println(String.format(
+                        "[LabyCos-BONE] %s: xRot=%.2f yRot=%.2f zRot=%.2f",
+                        key, Math.toDegrees(p.xRot), Math.toDegrees(p.yRot),
+                        Math.toDegrees(p.zRot)));
+                }
+            }
+        }
 
         // --- Rendern ---
         poseStack.pushPose();
@@ -95,39 +116,48 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
         }
 
-        poseStack.translate(0.0D, 0.0625D, 0.01D);
-
-
-        float scale = meta.scale();
-        if (scale != 1.0F) {
-            poseStack.scale(scale, scale, scale);
+        // Position: BACK-Wings (aeltere Generation) sitzen weiter vorne in
+        // der Geometrie und muessen nach hinten versetzt werden, damit die
+        // Fluegel hinter dem Koerper sitzen statt reinzuragen.
+        float zOffset = 0.01F;
+        if ("BACK".equals(meta.position())) {
+            zOffset = TEST_BACK_Z;   // Testwert, justieren
         }
-        poseStack.scale(0.8F, 0.8F, 0.8F);
+        poseStack.translate(0.0D, 0.0625D, zOffset);
+
+        // Scale aus dem Katalog (pro Cosmetic unterschiedlich) mit unserem
+        // Grund-Faktor kombinieren.
+        float scale = meta.scale() * 0.8F;
+        poseStack.scale(scale, scale, scale);
 
         var consumer = buffer.getBuffer(RenderType.entityTranslucent(texture));
 
         // Farben aus der userdata holen. data[0] ist die Textur-UUID,
         // ab data[1] kommen die Farben fuer color_0, color_1, color_2 ...
         List<String> data = worn.data();
-        float[] color0 = CosmeticColorRenderer.hexToRgb(colorAt(data, 1));
-        float[] color1 = CosmeticColorRenderer.hexToRgb(colorAt(data, 2));
-        float[] color2 = CosmeticColorRenderer.hexToRgb(colorAt(data, 3));
+        String hex0 = colorAt(data, 1);
+        String hex1 = colorAt(data, 2);
+        String hex2 = colorAt(data, 3);
 
-        // Jede Federreihe (color-Gruppe) mit ihrer Farbe rendern.
-        CosmeticColorRenderer.renderColorGroup(poseStack, consumer, packedLight,
-                built.root(), built.bonesByName(), "color_0", color0);
-        CosmeticColorRenderer.renderColorGroup(poseStack, consumer, packedLight,
-                built.root(), built.bonesByName(), "color_1", color1);
-        CosmeticColorRenderer.renderColorGroup(poseStack, consumer, packedLight,
-                built.root(), built.bonesByName(), "color_2", color2);
+        float[] color0 = CosmeticColorRenderer.hexToRgb(hex0);
+        float[] color1 = CosmeticColorRenderer.hexToRgb(hex1);
+        float[] color2 = hex2 != null ? CosmeticColorRenderer.hexToRgb(hex2) : null;
 
-        // Sichtbarkeit aller Gruppen am Ende wiederherstellen, damit der
-        // naechste Frame sauber startet.
-        for (var b : built.bonesByName().entrySet()) {
-            if (b.getKey().startsWith("color_")) {
-                b.getValue().visible = true;
-            }
+        // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...):
+        // die letzte tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
+        float[] restColor;
+        if (hex2 != null) {
+            restColor = color2;
+        } else if (hex1 != null) {
+            restColor = color1;
+        } else {
+            restColor = color0;
         }
+
+        // Komplettes Modell mit korrekter Faerbung aller Teile rendern.
+        CosmeticColorRenderer.renderColored(poseStack, consumer, packedLight,
+                built.root(), built.bonesByName(), built.geometry(),
+                color0, color1, color2, restColor);
 
         poseStack.popPose();
     }

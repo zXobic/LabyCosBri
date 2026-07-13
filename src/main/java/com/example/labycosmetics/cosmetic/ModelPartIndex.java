@@ -7,44 +7,50 @@ import java.util.Map;
 
 /**
  * Baut aus einem gebauten ModelPart-Baum eine flache Map
- * (Bone-Name -> ModelPart), damit der Animator die Bones per Namen
- * ansprechen kann.
+ * (Bone-Name -> ModelPart), damit Animator und Faerbung die Bones per Namen
+ * ansprechen koennen.
  * <p>
- * ModelPart speichert seine Kinder intern in einer Map; wir laufen sie
- * rekursiv ab. Da das children-Feld nicht oeffentlich ist, nutzen wir die
- * offizielle getAllParts()-Methode, die alle Nachfahren liefert - inklusive
- * der Namen ueber getChild(). Weil getAllParts() aber keine Namen mitliefert,
- * indexieren wir stattdessen ueber bekannte Bone-Namen aus der Geometrie.
+ * WICHTIG: Der {@link BedrockModelBuilder} erzeugt fuer rotierte Cubes
+ * zusaetzliche Zwischen-Bones mit Namen {@code <bone>_rcN}. Diese sind NICHT
+ * in {@link BedrockGeometry#bones} enthalten, tragen aber die eigentlichen
+ * Flaechen. Wir nehmen sie daher explizit mit in die Map auf, indem wir fuer
+ * jeden geo-Bone dessen _rcN-Kinder abfragen.
  */
 public final class ModelPartIndex {
 
     private ModelPartIndex() {
     }
 
-    /**
-     * Erzeugt die Namens-Map. Da ModelPart die Kind-Namen nicht oeffentlich
-     * herausgibt, uebergeben wir die Bone-Namen aus der geparsten Geometrie
-     * und holen sie einzeln per getChild() (rekursiv ueber die Hierarchie).
-     */
     public static Map<String, ModelPart> build(ModelPart root, BedrockGeometry geo) {
         Map<String, ModelPart> map = new HashMap<>();
-        // Wir laufen die Bone-Liste ab und folgen fuer jeden Bone dem Pfad
-        // von der Wurzel ueber seine Eltern-Kette bis zu ihm selbst.
+
         for (BedrockGeometry.Bone bone : geo.bones) {
             ModelPart part = resolve(root, geo, bone.name);
-            if (part != null) {
-                map.put(bone.name, part);
+            if (part == null) {
+                continue;
+            }
+            map.put(bone.name, part);
+
+            // Zusaetzlich die _rc-Zwischenbones dieses Bones aufnehmen.
+            // Sie heissen bone.name + "_rc0", "_rc1", ... - wir probieren
+            // aufsteigend, bis keins mehr existiert.
+            int rc = 0;
+            while (true) {
+                String rcName = bone.name + "_rc" + rc;
+                ModelPart rcPart;
+                try {
+                    rcPart = part.getChild(rcName);
+                } catch (Exception e) {
+                    break; // kein weiterer _rc-Bone
+                }
+                map.put(rcName, rcPart);
+                rc++;
             }
         }
         return map;
     }
 
-    /**
-     * Loest einen Bone-Namen zu seinem ModelPart auf, indem die Parent-Kette
-     * von der Wurzel aus durchlaufen wird (root -> ... -> bone).
-     */
     private static ModelPart resolve(ModelPart root, BedrockGeometry geo, String targetName) {
-        // Parent-Kette von targetName bis zur Wurzel aufbauen.
         java.util.List<String> chain = new java.util.ArrayList<>();
         String current = targetName;
         while (current != null) {
@@ -52,13 +58,12 @@ public final class ModelPartIndex {
             current = parentOf(geo, current);
         }
 
-        // Kette von der Wurzel aus abklappern.
         ModelPart part = root;
         for (String name : chain) {
             try {
                 part = part.getChild(name);
             } catch (Exception e) {
-                return null; // Kind nicht gefunden
+                return null;
             }
         }
         return part;

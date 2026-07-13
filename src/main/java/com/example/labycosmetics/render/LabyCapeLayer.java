@@ -112,7 +112,7 @@ public class LabyCapeLayer extends RenderLayer<AbstractClientPlayer, PlayerModel
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - swingSide / 2.0F));
 
         var vertexConsumer = buffer.getBuffer(RenderType.entitySolid(capeTexture));
-        capeModel.render(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY);
+        //capeModel.render(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY);
 
         poseStack.popPose();
     }

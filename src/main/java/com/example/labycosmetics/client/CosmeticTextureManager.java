@@ -91,8 +91,24 @@ public final class CosmeticTextureManager {
                         return;
                     }
 
+                    // Sprite-Sheet-Erkennung: Manche Cosmetics haben animierte
+                    // Texturen - viele quadratische Frames untereinander gestapelt
+                    // (z.B. 128x5120 = 40 Frames a 128x128). Ein normales Sheet ist
+                    // etwa quadratisch. Ist die Hoehe deutlich groesser als die
+                    // Breite (>= 2x), behandeln wir es als Sprite-Sheet und nehmen
+                    // vorerst nur den OBERSTEN Frame (quadratisch, Kantenlaenge =
+                    // Breite). Die volle Frame-Animation kann spaeter folgen.
+                    if (image.getHeight() >= image.getWidth() * 2) {
+                        NativeImage firstFrame = extractFirstFrame(image);
+                        image.close();
+                        image = firstFrame;
+                        LabyCosmeticsMod.LOGGER.info(
+                                "[LabyCosmetics] Animierte Textur erkannt ({}): zeige ersten Frame.", url);
+                    }
+
+                    final NativeImage finalImage = image;
                     Minecraft.getInstance().execute(() -> {
-                        DynamicTexture tex = new DynamicTexture(image);
+                        DynamicTexture tex = new DynamicTexture(finalImage);
                         ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(
                                 LabyCosmeticsMod.MOD_ID,
                                 "cosmetic/" + dir + "_" + uuid.replace("-", ""));
@@ -106,5 +122,21 @@ public final class CosmeticTextureManager {
                     CACHE.put(cacheKey, new Entry(State.NONE, null));
                     return null;
                 });
+    }
+
+    /**
+     * Schneidet aus einem Sprite-Sheet (viele quadratische Frames
+     * untereinander) den obersten Frame aus. Die Frame-Kantenlaenge
+     * entspricht der Breite der Textur.
+     */
+    private static NativeImage extractFirstFrame(NativeImage sheet) {
+        int size = sheet.getWidth();
+        NativeImage frame = new NativeImage(size, size, false);
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                frame.setPixelRGBA(x, y, sheet.getPixelRGBA(x, y));
+            }
+        }
+        return frame;
     }
 }

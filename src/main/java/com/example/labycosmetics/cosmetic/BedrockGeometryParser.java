@@ -73,6 +73,9 @@ public final class BedrockGeometryParser {
                     if (cubeObj.has("mirror")) {
                         cube.mirror = cubeObj.get("mirror").getAsBoolean();
                     }
+                    if (cubeObj.has("inflate")) {
+                        cube.inflate = cubeObj.get("inflate").getAsFloat();
+                    }
                     if (cubeObj.has("rotation")) {
                         cube.hasRotation = true;
                         cube.rotation = toFloatArray(cubeObj.getAsJsonArray("rotation"));

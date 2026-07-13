@@ -37,5 +37,6 @@ public final class BedrockGeometry {
         public boolean hasRotation = false;
         public float[] rotation = {0, 0, 0};  // Grad (x,y,z)
         public float[] pivot = {0, 0, 0};     // Drehpunkt des Cubes
+        public float inflate = 0f;            // Cube-Deformation (aufblasen/schrumpfen)
     }
 }

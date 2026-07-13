@@ -19,6 +19,7 @@ public final class BedrockAnimation {
     public static final class Clip {
         public boolean loop = true;
         public float lengthSeconds = 0f;
+        public boolean stateControlled = false;  // true wenn -t Zustands-Steuerung (IDLE/MOVING/...)
         /** Bone-Name -> Liste von Rotations-Keyframes. */
         public final Map<String, List<Keyframe>> rotations = new HashMap<>();
     }
@@ -34,8 +35,26 @@ public final class BedrockAnimation {
         }
     }
 
-    public Clip getClip(String name) {
-        return clips.get(name);
+    /**
+     * Sucht einen Clip, dessen Name (case-insensitive) auf das angegebene
+     * Suffix endet - z.B. "idle" findet "Idle" UND "elf_wings_idle".
+     * Fällt zurück auf exakte Übereinstimmung, sonst null.
+     */
+    public Clip findClipBySuffix(String suffix) {
+        String want = suffix.toLowerCase();
+        // Erst exakte Übereinstimmung bevorzugen
+        for (String key : clips.keySet()) {
+            if (key.equalsIgnoreCase(suffix)) {
+                return clips.get(key);
+            }
+        }
+        // Dann Endungs-Übereinstimmung
+        for (String key : clips.keySet()) {
+            if (key.toLowerCase().endsWith(want)) {
+                return clips.get(key);
+            }
+        }
+        return null;
     }
 
     /** Hilfsmethode: leere, sichere Keyframe-Liste. */

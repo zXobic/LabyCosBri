@@ -45,6 +45,21 @@ public final class BedrockAnimationParser {
                 clip.lengthSeconds = clipObj.get("animation_length").getAsFloat();
             }
 
+            // anim_time_update pruefen: Enthaelt es einen "-t"-Befehl mit
+            // Zustands-Liste (IDLE, MOVING, SNEAKING, ...), ist die Animation
+            // zustandsgesteuert und wird von uns nicht abgespielt (wir koennen
+            // die Zustaende nicht korrekt trennen -> wuerde Teile einklappen).
+            if (clipObj.has("anim_time_update")) {
+                JsonElement atu = clipObj.get("anim_time_update");
+                if (atu.isJsonPrimitive()) {
+                    String s = atu.getAsString();
+                    if (s.contains("-t ") && (s.contains("IDLE") || s.contains("MOVING")
+                            || s.contains("SNEAK"))) {
+                        clip.stateControlled = true;
+                    }
+                }
+            }
+
             JsonObject bones = clipObj.getAsJsonObject("bones");
             if (bones != null) {
                 for (String boneName : bones.keySet()) {

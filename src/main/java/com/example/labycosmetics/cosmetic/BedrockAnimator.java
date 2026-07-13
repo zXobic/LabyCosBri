@@ -4,6 +4,7 @@ import net.minecraft.client.model.geom.ModelPart;
 
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * Wendet eine {@link BedrockAnimation.Clip} auf die Bones (ModelParts) eines
@@ -24,6 +25,12 @@ import java.util.Map;
 public final class BedrockAnimator {
 
     private static final float DEG_TO_RAD = (float) (Math.PI / 180.0);
+
+    // Merkt sich pro ModelPart die Grund-Rotation aus der Geometrie
+    // (die statische Pose), damit die Animation sie nicht ueberschreibt,
+    // sondern DAZU addiert. WeakHashMap, damit alte Modelle vom GC entsorgt
+    // werden koennen.
+    private static final Map<ModelPart, float[]> BASE_ROTATION = new WeakHashMap<>();
 
     private BedrockAnimator() {
     }
@@ -56,11 +63,17 @@ public final class BedrockAnimator {
             }
             float[] rot = sample(entry.getValue(), t);
 
-            // Grad -> Radiant, mit Y/Z-Spiegelung passend zum gebauten Modell.
-            // Konsistent zum Model-Builder: X und Y negieren, Z bleibt.
-            part.xRot = -rot[0] * DEG_TO_RAD;
-            part.yRot = -rot[1] * DEG_TO_RAD;
-            part.zRot = rot[2] * DEG_TO_RAD;
+            // Grund-Rotation dieses Bones merken (beim ersten Mal), damit wir
+            // die statische Pose als Basis behalten. Sonst wuerde die Animation
+            // z.B. bei den Elf Wings die spreizende Grund-Rotation loeschen.
+            float[] base = BASE_ROTATION.computeIfAbsent(part,
+                    p -> new float[]{p.xRot, p.yRot, p.zRot});
+
+            // Animationswert (Grad -> Radiant), konsistent zum Model-Builder:
+            // X und Y negieren, Z bleibt. Auf die Grund-Rotation ADDIEREN.
+            part.xRot = base[0] + (-rot[0] * DEG_TO_RAD);
+            part.yRot = base[1] + (rot[1] * DEG_TO_RAD);
+            part.zRot = base[2] + (rot[2] * DEG_TO_RAD);
         }
     }
 

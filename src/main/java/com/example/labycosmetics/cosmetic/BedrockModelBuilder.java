@@ -32,6 +32,10 @@ import java.util.Map;
  */
 public final class BedrockModelBuilder {
 
+    // Auf true setzen, um beim Modellbau alle Cube-Umrechnungen in die
+    // Konsole zu dumpen (zum Debuggen der Geometrie).
+    private static final boolean DEBUG_CUBES = false;
+
     private static final float DEG_TO_RAD = (float) (Math.PI / 180.0);
 
     private BedrockModelBuilder() {
@@ -84,11 +88,12 @@ public final class BedrockModelBuilder {
         float py = -(bone.pivot[1] - parentPivot[1]);
         float pz = bone.pivot[2] - parentPivot[2];
 
-        // Bone-Rotation (Grad -> Radiant). Korrekte Bedrock->MC-Umrechnung
-        // bei Y-gespiegelter Position: X und Y negieren, Z bleibt.
-        float rx = -bone.rotation[0] * DEG_TO_RAD;
-        float ry = bone.rotation[1] * DEG_TO_RAD;
-        float rz = bone.rotation[2] * DEG_TO_RAD;
+        // Bone-Rotation: Bedrock -> MC-ZYX umrechnen (loest Reihenfolge-
+        // Problem bei mehrachsigen Rotationen).
+        float[] br = bedrockToMcRotation(bone.rotation[0], bone.rotation[1], bone.rotation[2], bone.name);
+        float rx = br[0];
+        float ry = br[1];
+        float rz = br[2];
 
         // Cubes OHNE eigene Rotation direkt in diesen Bone legen.
         CubeListBuilder plainCubes = CubeListBuilder.create();
@@ -117,6 +122,58 @@ public final class BedrockModelBuilder {
 
         return def;
     }
+/**
+     * Rechnet eine Bedrock-Rotation [xDeg, yDeg, zDeg] in die Minecraft-
+     * ZYX-Konvention um und liefert {xRot, yRot, zRot} in Radiant.
+     * Loest das Reihenfolge-Problem bei mehrachsigen Rotationen, ohne die
+     * Bone-Hierarchie zu veraendern.
+     */
+    private static float[] bedrockToMcRotation(float xDeg, float yDeg, float zDeg, String boneName) {
+        // === JUSTIER-REGLER (nur Flügel-Wurzeln right2/left2) ===
+        // Extra-Rotation zum Messen des fehlenden Winkels. In kleinen
+        // Schritten aendern und neu bauen, bis die Klingen exakt passen.
+        double rx = Math.toRadians(-xDeg);  // X negieren (Y-Spiegelung)
+        double ry = Math.toRadians(yDeg);
+        double rz = Math.toRadians(zDeg);
+
+        // Ziel-Matrix in Bedrock-Reihenfolge XYZ: M = Rx * Ry * Rz
+        double[][] mx = rotXm(rx);
+        double[][] my = rotYm(ry);
+        double[][] mz = rotZm(rz);
+        double[][] m = mul(mul(mx, my), mz);
+
+        // Aus M die MC-ZYX-Winkel extrahieren (M = Rz*Ry*Rx).
+        double sy = -m[2][0];
+        double ex, ey, ez;
+        if (Math.abs(sy) < 0.99999) {
+            ex = Math.atan2(m[2][1], m[2][2]);
+            ey = Math.asin(sy);
+            ez = Math.atan2(m[1][0], m[0][0]);
+        } else {
+            ex = Math.atan2(-m[1][2], m[1][1]);
+            ey = Math.asin(sy);
+            ez = 0;
+        }
+        return new float[]{(float) ex, (float) ey, (float) ez};
+    }
+
+    private static double[][] rotXm(double r) {
+        return new double[][]{{1,0,0},{0,Math.cos(r),-Math.sin(r)},{0,Math.sin(r),Math.cos(r)}};
+    }
+    private static double[][] rotYm(double r) {
+        return new double[][]{{Math.cos(r),0,Math.sin(r)},{0,1,0},{-Math.sin(r),0,Math.cos(r)}};
+    }
+    private static double[][] rotZm(double r) {
+        return new double[][]{{Math.cos(r),-Math.sin(r),0},{Math.sin(r),Math.cos(r),0},{0,0,1}};
+    }
+    private static double[][] mul(double[][] a, double[][] b) {
+        double[][] c = new double[3][3];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                for (int k = 0; k < 3; k++)
+                    c[i][j] += a[i][k] * b[k][j];
+        return c;
+    }
 
     private static void addRotatedCube(PartDefinition parentDef,
                                        BedrockGeometry.Cube cube,
@@ -127,11 +184,11 @@ public final class BedrockModelBuilder {
         float py = -(cube.pivot[1] - bonePivot[1]);
         float pz = cube.pivot[2] - bonePivot[2];
 
-        // Cube-Rotation: gleiche Umrechnung wie Bone (X,Y negieren, Z bleibt).
-        float rx = -cube.rotation[0] * DEG_TO_RAD;
-        float ry = cube.rotation[1] * DEG_TO_RAD;
-        float rz = cube.rotation[2] * DEG_TO_RAD;
-
+        // Cube-Rotation: gleiche Umrechnung wie Bone.
+        float[] cr = bedrockToMcRotation(cube.rotation[0], cube.rotation[1], cube.rotation[2], null);
+        float rx = cr[0];
+        float ry = cr[1];
+        float rz = cr[2];
         CubeListBuilder cubes = CubeListBuilder.create();
         // Innerhalb des Zwischen-Bones ist der Cube relativ zum Cube-Pivot.
         addCube(cubes, cube, cube.pivot);
@@ -155,11 +212,28 @@ public final class BedrockModelBuilder {
         float y = -(cube.origin[1] + sy) + referencePivot[1];
         float z = cube.origin[2] - referencePivot[2];
 
+        // DEBUG: Original- und umgerechnete Werte ausgeben.
+        if (DEBUG_CUBES) {
+            System.out.println(String.format(
+                "[LabyCos-CUBE] origin[%.2f,%.2f,%.2f] size[%.2f,%.2f,%.2f] "
+                + "refPivot[%.2f,%.2f,%.2f] inflate=%.2f rot=%s "
+                + "-> addBox xyz[%.2f,%.2f,%.2f] size[%.2f,%.2f,%.2f]",
+                cube.origin[0], cube.origin[1], cube.origin[2],
+                cube.size[0], cube.size[1], cube.size[2],
+                referencePivot[0], referencePivot[1], referencePivot[2],
+                cube.inflate,
+                (cube.hasRotation ? java.util.Arrays.toString(cube.rotation) : "none"),
+                x, y, z, sx, sy, sz));
+        }
+
         cubes.texOffs((int) cube.uv[0], (int) cube.uv[1]);
         if (cube.mirror) {
             cubes.mirror();
         }
-        cubes.addBox(x, y, z, sx, sy, sz, CubeDeformation.NONE);
+        CubeDeformation deformation = cube.inflate != 0f
+                ? new CubeDeformation(cube.inflate)
+                : CubeDeformation.NONE;
+        cubes.addBox(x, y, z, sx, sy, sz, deformation);
         if (cube.mirror) {
             cubes.mirror(false);
         }

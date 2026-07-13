@@ -5,15 +5,25 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Hilfsfunktionen fuer die farbige Darstellung von Cosmetic-Teilen.
+ * Rendert Cosmetic-Teile mit den passenden Farben.
  * <p>
- * LabyMod-Cosmetics koennen pro "color_X"-Bone-Gruppe eine eigene Farbe
- * haben (die X-te Farbe aus den userdata). Diese Klasse rendert gezielt
- * einzelne Bones (und ihre Kinder) mit einer bestimmten Farbe und wandelt
- * Hex-Strings in RGB um.
+ * LabyMod-Cosmetics ordnen Farben ueber Bone-Namens-Praefixe zu:
+ * {@code color_0_*} -> Farbe 1, {@code color_1_*} -> Farbe 2,
+ * {@code color_2_*} -> Farbe 3, alles andere -> Rest-Farbe (z.B. glow).
+ *
+ * <h3>Farb-VERERBUNG ueber die Hierarchie</h3>
+ * Ein color-Bone hat oft keine eigenen Cubes, sondern seine KINDER tragen
+ * die Flaechen. Deshalb bestimmt sich die Farbe eines Bones aus dem naechsten
+ * color-VORFAHREN in der Bone-Kette (inkl. der _rc-Zwischenbones fuer
+ * rotierte Cubes).
+ *
+ * <h3>Technik: skipDraw</h3>
+ * Pro Farbe rendern wir das ganze Modell einmal und ueberspringen per
+ * {@link ModelPart#skipDraw} alle Bones, die nicht zu dieser Farbe gehoeren.
  */
 public final class CosmeticColorRenderer {
 
@@ -39,42 +49,72 @@ public final class CosmeticColorRenderer {
         }
     }
 
-    /**
-     * Rendert das GESAMTE Modell von der Wurzel aus (damit alle Pivot-
-     * Versaetze der Eltern-Bones stimmen), aber nur die Bones einer
-     * Farbgruppe sind sichtbar - der Rest wird kurzzeitig ausgeblendet.
-     * So bekommt jede Federreihe ihre Farbe an der richtigen Position.
-     *
-     * @param root         Wurzel des Modells (wird gerendert)
-     * @param bones        alle Bones nach Name
-     * @param colorPrefix  z.B. "color_0" - nur diese Gruppe wird sichtbar
-     * @param rgb          Farbe fuer diese Gruppe
-     */
-    public static void renderColorGroup(PoseStack poseStack, VertexConsumer consumer,
-                                        int packedLight, ModelPart root,
-                                        Map<String, ModelPart> bones,
-                                        String colorPrefix, float[] rgb) {
-        // 1. Alle color-Bones ausblenden.
-        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
-            if (entry.getKey().startsWith("color_")) {
-                entry.getValue().visible = false;
-            }
+    private enum ColorClass { C0, C1, C2, REST }
+
+    private static ColorClass classifyWithInheritance(String boneName, BedrockGeometry geo) {
+        String current = boneName;
+        int guard = 0;
+        while (current != null && guard++ < 100) {
+            if (current.startsWith("color_0")) return ColorClass.C0;
+            if (current.startsWith("color_1")) return ColorClass.C1;
+            if (current.startsWith("color_2")) return ColorClass.C2;
+            current = parentOf(current, geo);
         }
-        // 2. Nur die gewuenschte Gruppe wieder einblenden.
-        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
-            if (entry.getKey().startsWith(colorPrefix)) {
-                entry.getValue().visible = true;
-            }
-        }
-        // 3. Von der Wurzel rendern (nur die sichtbare Gruppe erscheint).
-        int packedColor = packColor(rgb);
-        root.render(poseStack, consumer, packedLight,
-                OverlayTexture.NO_OVERLAY, packedColor);
+        return ColorClass.REST;
     }
-    /**
-     * Packt r,g,b (0..1) plus volle Deckkraft in einen ARGB-Integer,
-     * wie ModelPart#render ihn in dieser Version erwartet.
-     */
+
+    private static String parentOf(String boneName, BedrockGeometry geo) {
+        for (BedrockGeometry.Bone b : geo.bones) {
+            if (b.name.equals(boneName)) {
+                return b.parent;
+            }
+        }
+        int idx = boneName.lastIndexOf("_rc");
+        if (idx > 0) {
+            return boneName.substring(0, idx);
+        }
+        return null;
+    }
+
+    public static void renderColored(PoseStack poseStack, VertexConsumer consumer,
+                                     int packedLight, ModelPart root,
+                                     Map<String, ModelPart> bones, BedrockGeometry geo,
+                                     float[] color0, float[] color1,
+                                     float[] color2, float[] restColor) {
+
+        Map<String, ColorClass> classOf = new HashMap<>();
+        for (String name : bones.keySet()) {
+            classOf.put(name, classifyWithInheritance(name, geo));
+        }
+
+        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C0, color0);
+        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C1, color1);
+        if (color2 != null) {
+            renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C2, color2);
+        }
+        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.REST, restColor);
+
+        for (ModelPart part : bones.values()) {
+            part.skipDraw = false;
+        }
+    }
+
+    private static void renderPass(PoseStack poseStack, VertexConsumer consumer,
+                                   int packedLight, ModelPart root,
+                                   Map<String, ModelPart> bones,
+                                   Map<String, ColorClass> classOf,
+                                   ColorClass wanted, float[] rgb) {
+        if (rgb == null) {
+            return;
+        }
+        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
+            boolean draw = classOf.get(entry.getKey()) == wanted;
+            entry.getValue().skipDraw = !draw;
+        }
+        int packedColor = packColor(rgb);
+        root.render(poseStack, consumer, packedLight, OverlayTexture.NO_OVERLAY, packedColor);
+    }
+
     private static int packColor(float[] rgb) {
         int a = 255;
         int r = Math.round(rgb[0] * 255f);
