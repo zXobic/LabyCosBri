@@ -32,10 +32,6 @@ import java.util.Map;
  */
 public final class BedrockModelBuilder {
 
-    // Auf true setzen, um beim Modellbau alle Cube-Umrechnungen in die
-    // Konsole zu dumpen (zum Debuggen der Geometrie).
-    private static final boolean DEBUG_CUBES = false;
-
     private static final float DEG_TO_RAD = (float) (Math.PI / 180.0);
 
     private BedrockModelBuilder() {
@@ -129,7 +125,6 @@ public final class BedrockModelBuilder {
      * Bone-Hierarchie zu veraendern.
      */
     private static float[] bedrockToMcRotation(float xDeg, float yDeg, float zDeg, String boneName) {
-        // === JUSTIER-REGLER (nur Flügel-Wurzeln right2/left2) ===
         // Extra-Rotation zum Messen des fehlenden Winkels. In kleinen
         // Schritten aendern und neu bauen, bis die Klingen exakt passen.
         double rx = Math.toRadians(-xDeg);  // X negieren (Y-Spiegelung)
@@ -211,20 +206,6 @@ public final class BedrockModelBuilder {
         float x = cube.origin[0] - referencePivot[0];
         float y = -(cube.origin[1] + sy) + referencePivot[1];
         float z = cube.origin[2] - referencePivot[2];
-
-        // DEBUG: Original- und umgerechnete Werte ausgeben.
-        if (DEBUG_CUBES) {
-            System.out.println(String.format(
-                "[LabyCos-CUBE] origin[%.2f,%.2f,%.2f] size[%.2f,%.2f,%.2f] "
-                + "refPivot[%.2f,%.2f,%.2f] inflate=%.2f rot=%s "
-                + "-> addBox xyz[%.2f,%.2f,%.2f] size[%.2f,%.2f,%.2f]",
-                cube.origin[0], cube.origin[1], cube.origin[2],
-                cube.size[0], cube.size[1], cube.size[2],
-                referencePivot[0], referencePivot[1], referencePivot[2],
-                cube.inflate,
-                (cube.hasRotation ? java.util.Arrays.toString(cube.rotation) : "none"),
-                x, y, z, sx, sy, sz));
-        }
 
         cubes.texOffs((int) cube.uv[0], (int) cube.uv[1]);
         if (cube.mirror) {

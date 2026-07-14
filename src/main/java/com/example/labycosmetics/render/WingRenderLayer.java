@@ -25,13 +25,9 @@ import java.util.List;
 
 /**
  * Rendert das getragene WING-Cosmetic des lokalen Spielers dynamisch,
- * inklusive Flatter-Animation und pro-Federreihe-Faerbung aus der userdata.
+ * inklusive Animation und pro-Federreihe-Faerbung aus der userdata.
  */
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
-    // TEST: Z-Versatz für BACK-Wings (nach hinten = negativ). Justieren.
-    private static final float TEST_BACK_Z = 0.15F;
-
-    private static boolean DEBUG_BONES = true;
 
     public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
@@ -77,34 +73,15 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         }
 
         // --- Animation anwenden (falls vorhanden) ---
-        // WICHTIG: Manche Cosmetics (z.B. 963) haben zustandsgesteuerte
-        // Animationen (LabyMod -t Befehl mit IDLE/MOVING/SNEAKING), die wir
-        // nicht korrekt interpretieren koennen. Solche Animationen klappen
-        // Teile ein/aus. Wir wenden Animationen daher nur an, wenn der Clip
-        // NICHT zustandsgesteuert ist.
         BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
         if (anim != null) {
             BedrockAnimation.Clip clip = anim.findClipBySuffix("idle");
-            if (clip != null && !clip.stateControlled) {
+            if (clip != null) {
                 float rawTime = (player.tickCount + partialTicks) / 20.0F;
                 float clipLength = clip.lengthSeconds > 0f ? clip.lengthSeconds : 6.0F;
                 float phase = (rawTime % clipLength) / clipLength;
                 float timeSeconds = phase * clipLength;
                 BedrockAnimator.apply(built.root(), clip, timeSeconds, built.bonesByName());
-            }
-        }
-
-        // DEBUG: finale Rotation der Schluessel-Bones (Fluegelansatz) ausgeben.
-        if (DEBUG_BONES) {
-            DEBUG_BONES = false;
-            for (String key : new String[]{"color_0_c3", "color_0_c3_rc0", "color_0_b3", "color_0_b3_rc0", "color_0_b3_rc1"}) {
-                var p = built.bonesByName().get(key);
-                if (p != null) {
-                    System.out.println(String.format(
-                        "[LabyCos-BONE] %s: xRot=%.2f yRot=%.2f zRot=%.2f",
-                        key, Math.toDegrees(p.xRot), Math.toDegrees(p.yRot),
-                        Math.toDegrees(p.zRot)));
-                }
             }
         }
 
@@ -116,14 +93,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
         }
 
-        // Position: BACK-Wings (aeltere Generation) sitzen weiter vorne in
-        // der Geometrie und muessen nach hinten versetzt werden, damit die
-        // Fluegel hinter dem Koerper sitzen statt reinzuragen.
-        float zOffset = 0.01F;
-        if ("BACK".equals(meta.position())) {
-            zOffset = TEST_BACK_Z;   // Testwert, justieren
-        }
-        poseStack.translate(0.0D, 0.0625D, zOffset);
+        poseStack.translate(0.0D, 0.0625D, 0.01D);
 
         // Scale aus dem Katalog (pro Cosmetic unterschiedlich) mit unserem
         // Grund-Faktor kombinieren.
@@ -165,10 +135,5 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
     /** Sicherer Zugriff auf ein Farb-Element im data-Array (oder null). */
     private String colorAt(List<String> data, int index) {
         return (data != null && index < data.size()) ? data.get(index) : null;
-    }
-
-    private float easeWingBeat(float phase) {
-        final float POWER = 2.0F;
-        return (float) Math.pow(phase, POWER);
     }
 }
