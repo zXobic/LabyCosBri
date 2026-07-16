@@ -29,6 +29,9 @@ import java.util.List;
  */
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
+    // TEST: feste Wing-ID rendern statt der getragenen. 0 = aus.
+    private static final int TEST_WING_ID = 1460;
+
     public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
     }
@@ -47,17 +50,25 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         CosmeticCatalog.ensureLoading();
 
         Integer wingId = UserCosmeticsManager.findWornByCategory(player.getUUID(), "WING");
+        if (TEST_WING_ID != 0) {
+            wingId = TEST_WING_ID;
+        }
         if (wingId == null) {
             return;
         }
 
         var meta = CosmeticCatalog.get(wingId);
-        var worn = UserCosmeticsManager.getWorn(player.getUUID(), wingId);
-        if (meta == null || worn == null || meta.textureDirectory() == null) {
+        if (meta == null || meta.textureDirectory() == null) {
             return;
         }
 
-        String textureUuid = worn.textureUuid();
+        // Getragene Daten, sonst die Standard-Daten aus dem Katalog (Test-Modus).
+        var worn = UserCosmeticsManager.getWorn(player.getUUID(), wingId);
+        List<String> data = (worn != null) ? worn.data() : meta.defaultData();
+        if (data == null || data.isEmpty()) {
+            return;
+        }
+        String textureUuid = data.get(0);
         if (textureUuid == null) {
             return;
         }
@@ -73,7 +84,9 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         }
 
         // --- Animation anwenden (falls vorhanden) ---
-        BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
+        // TEST: true = Animation komplett aus -> Ruhe-Geometrie wie in Blockbench.
+        final boolean TEST_NO_ANIMATION = true;
+        BedrockAnimation anim = TEST_NO_ANIMATION ? null : CosmeticAnimationManager.getAnimation(wingId);
         if (anim != null) {
             BedrockAnimation.Clip clip = anim.findClipBySuffix("idle");
             if (clip != null) {
@@ -104,7 +117,6 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
 
         // Farben aus der userdata holen. data[0] ist die Textur-UUID,
         // ab data[1] kommen die Farben fuer color_0, color_1, color_2 ...
-        List<String> data = worn.data();
         String hex0 = colorAt(data, 1);
         String hex1 = colorAt(data, 2);
         String hex2 = colorAt(data, 3);

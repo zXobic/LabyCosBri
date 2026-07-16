@@ -33,7 +33,8 @@ public final class CosmeticCatalog {
             String category,          // WING, HAT, CLOAK, ...
             String position,          // BACK, HEAD_TOP, ... (kann null sein)
             String textureDirectory,  // z.B. "1460" (kann null sein)
-            float scale) {
+            float scale,
+            java.util.List<String> defaultData) {   // [textur-uuid, farbe1, ...]
     }
 
     private enum State { NOT_STARTED, LOADING, LOADED, FAILED }
@@ -112,7 +113,14 @@ public final class CosmeticCatalog {
             String textureDir = getStringOrNull(obj, "texture_directory");
             float scale = obj.has("scale") ? obj.get("scale").getAsFloat() : 1.0F;
 
-            CATALOG.put(id, new CosmeticMeta(id, category, position, textureDir, scale));
+            java.util.List<String> defaultData = new java.util.ArrayList<>();
+            if (obj.has("default_data") && obj.get("default_data").isJsonArray()) {
+                for (var el : obj.getAsJsonArray("default_data")) {
+                    defaultData.add(el.isJsonNull() ? null : el.getAsString());
+                }
+            }
+
+            CATALOG.put(id, new CosmeticMeta(id, category, position, textureDir, scale, defaultData));
         }
     }
 

@@ -26,9 +26,10 @@ import java.util.Map;
  * </ul>
  *
  * <h3>Koordinaten</h3>
- * Bedrock-Y zeigt nach oben, Minecraft-Model-Y nach unten -> wir spiegeln Y.
- * Rotationswinkel um X bleiben, um Y und Z kehren sich durch die Spiegelung
- * das Vorzeichen um (analog zum Animator).
+ * Bedrock-Y zeigt nach oben, Minecraft-Model-Y nach unten -> wir spiegeln
+ * Y-POSITIONEN. Die Rotationswinkel bleiben unveraendert: Bedrock nutzt
+ * ZYX wie Minecraft, und die 180-Grad-Drehung um Z zwischen den beiden
+ * Modellraeumen hebt alle Vorzeichen wieder auf.
  */
 public final class BedrockModelBuilder {
 
@@ -84,8 +85,7 @@ public final class BedrockModelBuilder {
         float py = -(bone.pivot[1] - parentPivot[1]);
         float pz = bone.pivot[2] - parentPivot[2];
 
-        // Bone-Rotation: Bedrock -> MC-ZYX umrechnen (loest Reihenfolge-
-        // Problem bei mehrachsigen Rotationen).
+        // Bone-Rotation: Bedrock-Werte gehen unveraendert durch.
         float[] br = bedrockToMcRotation(bone.rotation[0], bone.rotation[1], bone.rotation[2], bone.name);
         float rx = br[0];
         float ry = br[1];
@@ -119,37 +119,17 @@ public final class BedrockModelBuilder {
         return def;
     }
 /**
-     * Rechnet eine Bedrock-Rotation [xDeg, yDeg, zDeg] in die Minecraft-
-     * ZYX-Konvention um und liefert {xRot, yRot, zRot} in Radiant.
-     * Loest das Reihenfolge-Problem bei mehrachsigen Rotationen, ohne die
-     * Bone-Hierarchie zu veraendern.
+     * Rechnet eine Bedrock-Rotation [xDeg, yDeg, zDeg] in Minecraft-
+     * ModelPart-Winkel (Radiant) um.
+     *
+     * Bedrock verwendet ZYX - dieselbe Reihenfolge wie Minecraft. Blockbench-
+     * Raum und MC-Modellraum unterscheiden sich nur um eine 180-Grad-Drehung
+     * um Z; dabei heben sich alle Vorzeichen auf. Die JSON-Werte gehen also
+     * unveraendert durch. Gilt fuer Bones UND Cubes gleichermassen
+     * (Blockbench-Codec bedrock.js 631-632 und 706-708).
      */
     private static float[] bedrockToMcRotation(float xDeg, float yDeg, float zDeg, String boneName) {
-        // Extra-Rotation zum Messen des fehlenden Winkels. In kleinen
-        // Schritten aendern und neu bauen, bis die Klingen exakt passen.
-        double rx = Math.toRadians(-xDeg);  // X negieren (Y-Spiegelung)
-        double ry = Math.toRadians(yDeg);
-        double rz = Math.toRadians(zDeg);
-
-        // Ziel-Matrix in Bedrock-Reihenfolge XYZ: M = Rx * Ry * Rz
-        double[][] mx = rotXm(rx);
-        double[][] my = rotYm(ry);
-        double[][] mz = rotZm(rz);
-        double[][] m = mul(mul(mx, my), mz);
-
-        // Aus M die MC-ZYX-Winkel extrahieren (M = Rz*Ry*Rx).
-        double sy = -m[2][0];
-        double ex, ey, ez;
-        if (Math.abs(sy) < 0.99999) {
-            ex = Math.atan2(m[2][1], m[2][2]);
-            ey = Math.asin(sy);
-            ez = Math.atan2(m[1][0], m[0][0]);
-        } else {
-            ex = Math.atan2(-m[1][2], m[1][1]);
-            ey = Math.asin(sy);
-            ez = 0;
-        }
-        return new float[]{(float) ex, (float) ey, (float) ez};
+        return new float[]{xDeg * DEG_TO_RAD, yDeg * DEG_TO_RAD, zDeg * DEG_TO_RAD};
     }
 
     private static double[][] rotXm(double r) {
@@ -181,9 +161,15 @@ public final class BedrockModelBuilder {
 
         // Cube-Rotation: gleiche Umrechnung wie Bone.
         float[] cr = bedrockToMcRotation(cube.rotation[0], cube.rotation[1], cube.rotation[2], null);
-        float rx = cr[0];
-        float ry = cr[1];
-        float rz = cr[2];
+
+        // === DIAGNOSE-TEST ===
+        // true  = Cube-Rotationen komplett aus (Cubes haengen unrotiert am Pivot)
+        // false = normal
+        boolean TEST_NO_CUBE_ROTATION = false;
+
+        float rx = TEST_NO_CUBE_ROTATION ? 0f : cr[0];
+        float ry = TEST_NO_CUBE_ROTATION ? 0f : cr[1];
+        float rz = TEST_NO_CUBE_ROTATION ? 0f : cr[2];
         CubeListBuilder cubes = CubeListBuilder.create();
         // Innerhalb des Zwischen-Bones ist der Cube relativ zum Cube-Pivot.
         addCube(cubes, cube, cube.pivot);

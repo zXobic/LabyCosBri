@@ -14,8 +14,8 @@ import java.util.WeakHashMap;
  * <h3>Wichtige Umrechnungen</h3>
  * <ul>
  *   <li>Bedrock-Rotationen sind in GRAD, ModelPart erwartet RADIANT.</li>
- *   <li>Bedrock-Y und -Z sind gegenueber Minecraft gespiegelt (weil wir das
- *       Modell beim Bau in Y gespiegelt haben) -> wir negieren Y und Z.</li>
+ *   <li>Die Winkel gehen unveraendert durch - gleiche Konvention wie im
+ *       BedrockModelBuilder. Nur POSITIONEN werden in Y gespiegelt.</li>
  *   <li>Interpolation: Bedrock nutzt hier "catmullrom" (weiche Kurve). Wir
  *       implementieren eine Catmull-Rom-Interpolation ueber die vier
  *       umliegenden Keyframes; bei Randfaellen faellt sie auf lineare
@@ -70,8 +70,8 @@ public final class BedrockAnimator {
                     p -> new float[]{p.xRot, p.yRot, p.zRot});
 
             // Animationswert (Grad -> Radiant), konsistent zum Model-Builder:
-            // X und Y negieren, Z bleibt. Auf die Grund-Rotation ADDIEREN.
-            part.xRot = base[0] + (-rot[0] * DEG_TO_RAD);
+            // Werte gehen unveraendert durch. Auf die Grund-Rotation ADDIEREN.
+            part.xRot = base[0] + (rot[0] * DEG_TO_RAD);
             part.yRot = base[1] + (rot[1] * DEG_TO_RAD);
             part.zRot = base[2] + (rot[2] * DEG_TO_RAD);
         }
