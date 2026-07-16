@@ -20,7 +20,7 @@ import org.slf4j.LoggerFactory;
 @Mod(LabyCosmeticsMod.MOD_ID)
 public class LabyCosmeticsMod {
 
-    public static final String MOD_ID = "labycosmetics";
+    public static final String MOD_ID = "labycosbri";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     public LabyCosmeticsMod(IEventBus modEventBus) {
