@@ -13,23 +13,14 @@ import java.util.Map;
 
 /**
  * Wandelt eine geparste {@link BedrockGeometry} in einen fertig gebackenen
- * Minecraft-{@link ModelPart} um - jetzt inklusive Bone- und Cube-Rotationen.
+ * Minecraft-{@link ModelPart} um.
  *
- * <h3>Wie Rotationen umgesetzt werden</h3>
- * <ul>
- *   <li><b>Bone-Rotation:</b> wird direkt in die PartPose des Bones gelegt
- *       (PartPose kann Position UND Rotation).</li>
- *   <li><b>Cube-Rotation:</b> Minecraft-Cubes koennen selbst nicht rotieren.
- *       Wir legen daher fuer jeden rotierten Cube einen eigenen Zwischen-Bone
- *       an, der am Cube-Pivot sitzt und die Rotation traegt; der Cube haengt
- *       dann rotationsfrei darunter.</li>
- * </ul>
+ * <p>Rotierte Cubes bekommen je einen Zwischen-Bone ("_rc") am Cube-Pivot,
+ * da Minecraft-Cubes selbst nicht rotieren koennen.
  *
- * <h3>Koordinaten</h3>
- * Bedrock-Y zeigt nach oben, Minecraft-Model-Y nach unten -> wir spiegeln
- * Y-POSITIONEN. Die Rotationswinkel bleiben unveraendert: Bedrock nutzt
- * ZYX wie Minecraft, und die 180-Grad-Drehung um Z zwischen den beiden
- * Modellraeumen hebt alle Vorzeichen wieder auf.
+ * <p>Nur Y-POSITIONEN werden gespiegelt. Rotationen gehen unveraendert durch -
+ * fuer Bones und Cubes gleichermassen; Details siehe
+ * {@link #bedrockToMcRotation}. Der BedrockAnimator nutzt dieselbe Konvention.
  */
 public final class BedrockModelBuilder {
 
@@ -86,7 +77,7 @@ public final class BedrockModelBuilder {
         float pz = bone.pivot[2] - parentPivot[2];
 
         // Bone-Rotation: Bedrock-Werte gehen unveraendert durch.
-        float[] br = bedrockToMcRotation(bone.rotation[0], bone.rotation[1], bone.rotation[2], bone.name);
+        float[] br = bedrockToMcRotation(bone.rotation[0], bone.rotation[1], bone.rotation[2]);
         float rx = br[0];
         float ry = br[1];
         float rz = br[2];
@@ -128,26 +119,8 @@ public final class BedrockModelBuilder {
      * unveraendert durch. Gilt fuer Bones UND Cubes gleichermassen
      * (Blockbench-Codec bedrock.js 631-632 und 706-708).
      */
-    private static float[] bedrockToMcRotation(float xDeg, float yDeg, float zDeg, String boneName) {
+    private static float[] bedrockToMcRotation(float xDeg, float yDeg, float zDeg) {
         return new float[]{xDeg * DEG_TO_RAD, yDeg * DEG_TO_RAD, zDeg * DEG_TO_RAD};
-    }
-
-    private static double[][] rotXm(double r) {
-        return new double[][]{{1,0,0},{0,Math.cos(r),-Math.sin(r)},{0,Math.sin(r),Math.cos(r)}};
-    }
-    private static double[][] rotYm(double r) {
-        return new double[][]{{Math.cos(r),0,Math.sin(r)},{0,1,0},{-Math.sin(r),0,Math.cos(r)}};
-    }
-    private static double[][] rotZm(double r) {
-        return new double[][]{{Math.cos(r),-Math.sin(r),0},{Math.sin(r),Math.cos(r),0},{0,0,1}};
-    }
-    private static double[][] mul(double[][] a, double[][] b) {
-        double[][] c = new double[3][3];
-        for (int i = 0; i < 3; i++)
-            for (int j = 0; j < 3; j++)
-                for (int k = 0; k < 3; k++)
-                    c[i][j] += a[i][k] * b[k][j];
-        return c;
     }
 
     private static void addRotatedCube(PartDefinition parentDef,
@@ -160,16 +133,12 @@ public final class BedrockModelBuilder {
         float pz = cube.pivot[2] - bonePivot[2];
 
         // Cube-Rotation: gleiche Umrechnung wie Bone.
-        float[] cr = bedrockToMcRotation(cube.rotation[0], cube.rotation[1], cube.rotation[2], null);
+        float[] cr = bedrockToMcRotation(cube.rotation[0], cube.rotation[1], cube.rotation[2]);
 
-        // === DIAGNOSE-TEST ===
-        // true  = Cube-Rotationen komplett aus (Cubes haengen unrotiert am Pivot)
-        // false = normal
-        boolean TEST_NO_CUBE_ROTATION = false;
+        float rx = cr[0];
+        float ry = cr[1];
+        float rz = cr[2];
 
-        float rx = TEST_NO_CUBE_ROTATION ? 0f : cr[0];
-        float ry = TEST_NO_CUBE_ROTATION ? 0f : cr[1];
-        float rz = TEST_NO_CUBE_ROTATION ? 0f : cr[2];
         CubeListBuilder cubes = CubeListBuilder.create();
         // Innerhalb des Zwischen-Bones ist der Cube relativ zum Cube-Pivot.
         addCube(cubes, cube, cube.pivot);

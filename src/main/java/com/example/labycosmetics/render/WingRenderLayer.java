@@ -9,8 +9,8 @@ import com.example.labycosmetics.cosmetic.CosmeticCatalog;
 import com.example.labycosmetics.cosmetic.CosmeticColorRenderer;
 import com.example.labycosmetics.cosmetic.CosmeticGeometryManager;
 import com.example.labycosmetics.cosmetic.UserCosmeticsManager;
+import com.example.labycosmetics.cosmetic.WingAnimationController;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.PlayerModel;
@@ -24,13 +24,22 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.List;
 
 /**
- * Rendert das getragene WING-Cosmetic des lokalen Spielers dynamisch,
- * inklusive Animation und pro-Federreihe-Faerbung aus der userdata.
+ * Rendert das getragene WING-Cosmetic des lokalen Spielers dynamisch, inklusive
+ * Animation und pro-Federreihe-Faerbung aus der userdata.
  */
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
-    // TEST: feste Wing-ID rendern statt der getragenen. 0 = aus.
-    private static final int TEST_WING_ID = 1460;
+    /** TEST: feste Wing-ID statt der getragenen; Textur dann aus meta.defaultData(). 0 = aus. */
+    private static final int TEST_WING_ID = 963;
+
+    /**
+     * TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
+     * zwingend, sonst vergleicht man die eigene animierte Pose gegen dessen Ruhepose.
+     */
+    private static final boolean TEST_NO_ANIMATION = false;
+
+    /** Nur der lokale Spieler wird gerendert, eine Instanz reicht. Sonst: Map<UUID, ...>. */
+    private final WingAnimationController controller = new WingAnimationController();
 
     public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
@@ -83,19 +92,27 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             return;
         }
 
-        // --- Animation anwenden (falls vorhanden) ---
-        // TEST: true = Animation komplett aus -> Ruhe-Geometrie wie in Blockbench.
-        final boolean TEST_NO_ANIMATION = true;
-        BedrockAnimation anim = TEST_NO_ANIMATION ? null : CosmeticAnimationManager.getAnimation(wingId);
-        if (anim != null) {
-            BedrockAnimation.Clip clip = anim.findClipBySuffix("idle");
-            if (clip != null) {
-                float rawTime = (player.tickCount + partialTicks) / 20.0F;
-                float clipLength = clip.lengthSeconds > 0f ? clip.lengthSeconds : 6.0F;
-                float phase = (rawTime % clipLength) / clipLength;
-                float timeSeconds = phase * clipLength;
-                BedrockAnimator.apply(built.root(), clip, timeSeconds, built.bonesByName());
-            }
+        // --- Animation anwenden ---
+        if (!TEST_NO_ANIMATION) {
+            BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
+            float now = (player.tickCount + partialTicks) / 20.0F;
+            // limbSwingAmount laeuft weich aus - STOP_MOVING zuendet daher erst ein
+            // paar Ticks nach dem Stehenbleiben.
+            // onGround und inWater kommen direkt vom Spieler. Die MOTION_*-Werte
+            // stehen auf false: kein Cosmetic benutzt MOTION_FORWARD (nur der
+            // Tippfehler MOVING_FORWARD bei 1689), MOTION_BACKWARDS nur bei
+            // 1689 [ARMS] - kein Wing. Damit UNGEMESSEN und bewusst offen.
+            var world = new BedrockAnimation.WorldState(
+                    WingAnimationController.isMoving(limbSwingAmount),
+                    player.isCrouching(),
+                    player.onGround(),
+                    player.isInWater(),
+                    false,
+                    false);
+            controller.update(anim, wingId, world, now);
+            // apply() setzt auch bei clip == null alle Bones auf die Ruhepose.
+            BedrockAnimator.apply(built.root(), controller.clip(),
+                    controller.clipTimeSeconds(), built.bonesByName());
         }
 
         // --- Rendern ---
@@ -108,15 +125,13 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
 
         poseStack.translate(0.0D, 0.0625D, 0.01D);
 
-        // Scale aus dem Katalog (pro Cosmetic unterschiedlich) mit unserem
-        // Grund-Faktor kombinieren.
+        // Scale aus dem Katalog (pro Cosmetic verschieden) mit unserem Grund-Faktor.
         float scale = meta.scale() * 0.8F;
         poseStack.scale(scale, scale, scale);
 
         var consumer = buffer.getBuffer(RenderType.entityTranslucent(texture));
 
-        // Farben aus der userdata holen. data[0] ist die Textur-UUID,
-        // ab data[1] kommen die Farben fuer color_0, color_1, color_2 ...
+        // data[0] ist die Textur-UUID, ab data[1] die Farben fuer color_0, color_1, ...
         String hex0 = colorAt(data, 1);
         String hex1 = colorAt(data, 2);
         String hex2 = colorAt(data, 3);
@@ -125,8 +140,8 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         float[] color1 = CosmeticColorRenderer.hexToRgb(hex1);
         float[] color2 = hex2 != null ? CosmeticColorRenderer.hexToRgb(hex2) : null;
 
-        // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...):
-        // die letzte tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
+        // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...): die letzte
+        // tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
         float[] restColor;
         if (hex2 != null) {
             restColor = color2;
@@ -136,7 +151,6 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             restColor = color0;
         }
 
-        // Komplettes Modell mit korrekter Faerbung aller Teile rendern.
         CosmeticColorRenderer.renderColored(poseStack, consumer, packedLight,
                 built.root(), built.bonesByName(), built.geometry(),
                 color0, color1, color2, restColor);
