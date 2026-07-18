@@ -1,6 +1,6 @@
 **Deutsch** | [English](README.md)
 
-# Cosmetics Bridge LabyCos
+# Cosmetics Bridge LabyCosBri
 
 > **Hinweis:** Dieses Projekt ist **nicht** von LabyMod / LabyMedia GmbH und
 > steht in **keiner** Verbindung zu ihnen. Es handelt sich um ein privates,
