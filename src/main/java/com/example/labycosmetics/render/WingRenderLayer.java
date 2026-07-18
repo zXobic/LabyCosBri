@@ -30,7 +30,7 @@ import java.util.List;
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
     /** TEST: feste Wing-ID statt der getragenen; Textur dann aus meta.defaultData(). 0 = aus. */
-    private static final int TEST_WING_ID = 963;
+    private static final int TEST_WING_ID = 0;
 
     /**
      * TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench

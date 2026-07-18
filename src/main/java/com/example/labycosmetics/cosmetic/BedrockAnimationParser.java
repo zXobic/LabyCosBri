@@ -106,8 +106,9 @@ public final class BedrockAnimationParser {
      * Flags laut docs.labymod.net/pages/cosmetics/arguments/:
      * -t Zustandsliste, -c Bedingungsliste (alle muessen zutreffen),
      * -p Lose fuer die gewichtete Ziehung, -s Speedup bei gefuellter Queue,
-     * -q Wechsel wartet aufs Clip-Ende (wertet der Controller aus; steht in
-     * 931 von 934 Faellen auf true).
+     * -q Wechsel wartet aufs Clip-Ende, -f bricht den laufenden Clip ab und
+     * spielt sofort. Weder -q noch -f: Trigger wird verworfen, wenn schon
+     * etwas laeuft (570 Clips im Katalog, kein bekannter Wing).
      * Unbekannte Flags werden geloggt statt still verschluckt.
      */
     private static void parseAnimTimeUpdate(String s, BedrockAnimation.Clip clip, String clipName) {
@@ -162,9 +163,8 @@ public final class BedrockAnimationParser {
                         LOGGER.warn("[LabyCos] Clip '{}': -s ist keine Zahl: '{}'", clipName, value);
                     }
                 }
-                case "-q" -> {
-                    // steht in allen bekannten Dateien auf "true" -> ignoriert
-                }
+                case "-q" -> clip.queued = parseFlagBool(value, "-q", clipName);
+                case "-f" -> clip.force = parseFlagBool(value, "-f", clipName);
                 default -> {
                     // Werte-Token (z.B. "IDLE,MOVING") landen hier ebenfalls.
                     // Nur echte Flags melden: "-x" mit einem Buchstaben.
@@ -176,6 +176,26 @@ public final class BedrockAnimationParser {
                 }
             }
         }
+    }
+
+    /**
+     * Liest einen boolschen Flag-Wert. Gemeldet statt still zu false gemacht:
+     * Boolean.parseBoolean schluckt jeden Unsinn als false, und stilles
+     * Verschlucken ist genau das, was dieser Parser sonst nirgends tut.
+     * <p>
+     * Case-insensitive, weil "-q True" (grosses T) einmal im Katalog steht
+     * (Tree Spirit 1680 - dieselbe Datei hat auch andere Schlampigkeiten).
+     */
+    private static boolean parseFlagBool(String value, String flag, String clipName) {
+        String v = value.trim();
+        if (v.equalsIgnoreCase("true")) {
+            return true;
+        }
+        if (v.equalsIgnoreCase("false")) {
+            return false;
+        }
+        LOGGER.warn("[LabyCos] Clip '{}': {} ist kein true/false: '{}'", clipName, flag, value);
+        return false;
     }
 
     /**

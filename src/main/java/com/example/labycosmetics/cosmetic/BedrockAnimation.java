@@ -92,6 +92,37 @@ public final class BedrockAnimation {
         public int probability = 1;
 
         /**
+         * -q true: der Wechsel wartet auf das Ende des laufenden Clips.
+         * <p>
+         * Dokumentiert: docs.labymod.net/pages/cosmetics/arguments/ -
+         * "The animation will be queued and played after the current
+         * animation has finished."
+         * <p>
+         * Katalog: 931x true, 2x false, 1x "True" (grosses T, Tree Spirit
+         * 1680 - dieselbe Datei hat auch andere Schlampigkeiten, daraus
+         * wird kein Verhalten abgeleitet).
+         */
+        public boolean queued = false;
+
+        /**
+         * -f true: bricht den laufenden Clip ab und spielt sofort.
+         * <p>
+         * Dokumentiert: docs.labymod.net/pages/cosmetics/arguments/ -
+         * "Force the animation to play immediately and interrupt the
+         * current animation."
+         * <p>
+         * 163x im Katalog, u.a. Wing 24 / STARTMOVING. Weil abgebrochen
+         * wird, startet der neue Clip NICHT an der Zyklusgrenze - die
+         * nahtlosen Nahtstellen (alle 5 Wings nachgerechnet) gelten dort
+         * also nicht. Ein sichtbarer Sprung ist die BELEGTE Folge von -f,
+         * kein Fehler und kein Grund fuer eine Ueberblendung.
+         * <p>
+         * Weder -q noch -f: der Trigger wird verworfen, wenn schon etwas
+         * laeuft ("the animation will not be played").
+         */
+        public boolean force = false;
+
+        /**
          * Faktor aus -s. Beschleunigt den Clip, SOLANGE eine andere
          * Animation in der Queue wartet - sonst gar nicht.
          * <p>
