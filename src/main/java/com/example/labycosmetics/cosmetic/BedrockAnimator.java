@@ -15,11 +15,15 @@ import java.util.WeakHashMap;
  * <ul>
  *   <li>Bedrock-Rotationen sind in GRAD, ModelPart erwartet RADIANT.</li>
  *   <li>Die Winkel gehen unveraendert durch - gleiche Konvention wie im
- *       BedrockModelBuilder. Nur POSITIONEN werden in Y gespiegelt.</li>
- *   <li>Interpolation: Bedrock nutzt hier "catmullrom" (weiche Kurve). Wir
- *       implementieren eine Catmull-Rom-Interpolation ueber die vier
- *       umliegenden Keyframes; bei Randfaellen faellt sie auf lineare
- *       Interpolation zurueck.</li>
+ *       BedrockModelBuilder. Bei POSITIONEN wird Y gespiegelt, X und Z
+ *       nicht.</li>
+ *   <li>Interpolation: "lerp_mode" pro Keyframe entscheidet zwischen linear
+ *       (Bedrock-Default) und catmullrom. Nicht global - Wing 54 und 963
+ *       mischen beides innerhalb einer Datei.</li>
+ *   <li>Vor jedem Anwenden werden ALLE Bones auf ihre Grund-Pose
+ *       zurueckgesetzt. Sonst bliebe ein Bone, den der vorige Clip animiert
+ *       hat und der neue nicht kennt, fuer immer in seiner letzten Pose
+ *       stehen.</li>
  * </ul>
  */
 public final class BedrockAnimator {
@@ -32,6 +36,9 @@ public final class BedrockAnimator {
     // werden koennen.
     private static final Map<ModelPart, float[]> BASE_ROTATION = new WeakHashMap<>();
 
+    /** Dasselbe fuer die Grund-Position aus der Geometrie. */
+    private static final Map<ModelPart, float[]> BASE_POSITION = new WeakHashMap<>();
+
     private BedrockAnimator() {
     }
 
@@ -42,19 +49,21 @@ public final class BedrockAnimator {
      *
      * @param root         Wurzel des gebauten Modells
      * @param clip         die abzuspielende Animation
-     * @param timeSeconds  aktuelle Zeit (bereits ggf. geloopt)
+     * @param timeSeconds  Zeit seit Beginn dieses Clips (NICHT vorgeloopt -
+     *                     das Umbrechen macht diese Methode je nach LoopMode)
      * @param bonesByName  Map Bone-Name -> ModelPart (siehe ModelPartIndex)
      */
     public static void apply(ModelPart root, BedrockAnimation.Clip clip,
                              float timeSeconds, Map<String, ModelPart> bonesByName) {
+        // Immer zuruecksetzen - auch bei clip == null. Sonst friert das
+        // Modell in der letzten animierten Pose ein statt in die Ruhepose
+        // zurueckzukehren.
+        resetToBase(bonesByName);
         if (clip == null) {
             return;
         }
 
-        float t = timeSeconds;
-        if (clip.loop && clip.lengthSeconds > 0f) {
-            t = t % clip.lengthSeconds;
-        }
+        float t = clipTime(clip, timeSeconds);
 
         for (Map.Entry<String, List<BedrockAnimation.Keyframe>> entry : clip.rotations.entrySet()) {
             ModelPart part = bonesByName.get(entry.getKey());
@@ -62,12 +71,7 @@ public final class BedrockAnimator {
                 continue;
             }
             float[] rot = sample(entry.getValue(), t);
-
-            // Grund-Rotation dieses Bones merken (beim ersten Mal), damit wir
-            // die statische Pose als Basis behalten. Sonst wuerde die Animation
-            // z.B. bei den Elf Wings die spreizende Grund-Rotation loeschen.
-            float[] base = BASE_ROTATION.computeIfAbsent(part,
-                    p -> new float[]{p.xRot, p.yRot, p.zRot});
+            float[] base = baseOf(part);
 
             // Animationswert (Grad -> Radiant), konsistent zum Model-Builder:
             // Werte gehen unveraendert durch. Auf die Grund-Rotation ADDIEREN.
@@ -75,6 +79,71 @@ public final class BedrockAnimator {
             part.yRot = base[1] + (rot[1] * DEG_TO_RAD);
             part.zRot = base[2] + (rot[2] * DEG_TO_RAD);
         }
+
+        for (Map.Entry<String, List<BedrockAnimation.Keyframe>> entry : clip.positions.entrySet()) {
+            ModelPart part = bonesByName.get(entry.getKey());
+            if (part == null) {
+                continue;
+            }
+            float[] pos = sample(entry.getValue(), t);
+            float[] base = basePosOf(part);
+
+            // NUR Y wird gespiegelt - dieselbe Konvention wie im
+            // BedrockModelBuilder (py = -(pivot[1] - parentPivot[1])).
+            // X und Z gehen unveraendert durch.
+            part.x = base[0] + pos[0];
+            part.y = base[1] - pos[1];
+            part.z = base[2] + pos[2];
+        }
+    }
+
+    /**
+     * Rechnet die verstrichene Zeit auf die Zeit innerhalb des Clips um.
+     * <p>
+     * HOLD_LAST und ONCE verhalten sich hier gleich: beide klemmen am Ende
+     * fest. Der Unterschied ist Sache des Aufrufers - bei ONCE soll er
+     * weiterschalten, bei HOLD_LAST stehenbleiben.
+     */
+    private static float clipTime(BedrockAnimation.Clip clip, float timeSeconds) {
+        if (clip.lengthSeconds <= 0f) {
+            return timeSeconds;
+        }
+        if (clip.loopMode == BedrockAnimation.LoopMode.LOOP) {
+            return timeSeconds % clip.lengthSeconds;
+        }
+        return Math.min(timeSeconds, clip.lengthSeconds);
+    }
+
+    /** Setzt alle Bones des Modells auf ihre Grund-Pose aus der Geometrie. */
+    private static void resetToBase(Map<String, ModelPart> bonesByName) {
+        for (ModelPart part : bonesByName.values()) {
+            float[] rot = baseOf(part);
+            part.xRot = rot[0];
+            part.yRot = rot[1];
+            part.zRot = rot[2];
+
+            float[] pos = basePosOf(part);
+            part.x = pos[0];
+            part.y = pos[1];
+            part.z = pos[2];
+        }
+    }
+
+    /** Grund-Position eines Bones aus der Geometrie, beim ersten Mal gemerkt. */
+    private static float[] basePosOf(ModelPart part) {
+        return BASE_POSITION.computeIfAbsent(part,
+                p -> new float[]{p.x, p.y, p.z});
+    }
+
+    /**
+     * Grund-Rotation eines Bones - beim ersten Aufruf aus dem frisch
+     * gebauten ModelPart gelesen und gemerkt. Ohne das wuerde die Animation
+     * die statische Pose loeschen (z.B. die spreizende Grund-Rotation der
+     * Elf Wings).
+     */
+    private static float[] baseOf(ModelPart part) {
+        return BASE_ROTATION.computeIfAbsent(part,
+                p -> new float[]{p.xRot, p.yRot, p.zRot});
     }
 
     /**
@@ -104,11 +173,28 @@ public final class BedrockAnimator {
         float span = p2.time - p1.time;
         float localT = span > 0f ? (t - p1.time) / span : 0f;
 
+        float[] out = new float[3];
+
+        // Bedrock-Default ist LINEAR. Weich wird nur interpoliert, wenn
+        // BEIDE Enden des Segments catmullrom sagen.
+        //
+        // Welches Ende die Regel vorgibt, ist NICHT belegt - denkbar waeren
+        // auch "linkes Ende entscheidet" oder "eines reicht". Gemessen ueber
+        // alle fuenf bekannten Wings sind die drei Regeln bei 35, 54, 404 und
+        // 1460 exakt deckungsgleich und unterscheiden sich nur bei
+        // 963 idle2/color_0_a3 um 8,5 Grad. Deshalb die konservative Wahl.
+        // Wer es belegt: hier eintragen.
+        if (!p1.catmullrom || !p2.catmullrom) {
+            for (int c = 0; c < 3; c++) {
+                out[c] = p1.value[c] + (p2.value[c] - p1.value[c]) * localT;
+            }
+            return out;
+        }
+
         // Catmull-Rom braucht die zwei aeusseren Stuetzpunkte p0 und p3.
         BedrockAnimation.Keyframe p0 = keys.get(Math.max(0, i - 1));
         BedrockAnimation.Keyframe p3 = keys.get(Math.min(keys.size() - 1, i + 2));
 
-        float[] out = new float[3];
         for (int c = 0; c < 3; c++) {
             out[c] = catmullRom(p0.value[c], p1.value[c], p2.value[c], p3.value[c], localT);
         }

@@ -1,6 +1,7 @@
 package com.example.labycosmetics.render;
 
 import com.example.labycosmetics.client.CapeTextureManager;
+import com.example.labycosmetics.cosmetic.UserCosmeticsManager;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.model.PlayerModel;
@@ -50,6 +51,14 @@ public class LabyCapeLayer extends RenderLayer<AbstractClientPlayer, PlayerModel
                         float partialTicks, float ageInTicks, float netHeadYaw, float headPitch) {
 
         if (!player.isModelPartShown(PlayerModelPart.CAPE)) {
+            return;
+        }
+
+        // Nur rendern, wenn der Spieler den Cloak (Cosmetic id 0) auch
+        // TRAEGT. /capes/{uuid} liefert das BESESSENE Cape unabhaengig davon,
+        // ob es getragen wird - die Trage-Wahrheit steht allein in userdata."c".
+        // Belegt an Account 3d61e681: getragen -> "c":[{"i":0,...}], aus -> "c":[].
+        if (UserCosmeticsManager.getWorn(player.getUUID(), 0) == null) {
             return;
         }
 
@@ -112,7 +121,7 @@ public class LabyCapeLayer extends RenderLayer<AbstractClientPlayer, PlayerModel
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - swingSide / 2.0F));
 
         var vertexConsumer = buffer.getBuffer(RenderType.entitySolid(capeTexture));
-        //capeModel.render(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY);
+        capeModel.render(poseStack, vertexConsumer, packedLight, OverlayTexture.NO_OVERLAY);
 
         poseStack.popPose();
     }

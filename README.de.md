@@ -15,15 +15,12 @@ NeoForge 1.21.1. Diese Mod stellt bestimmte Cosmetics im Spiel dar, indem sie
 
 ## Features
 
-- **Capes / Cloaks** – mit Animationen
+- **Capes / Cloaks** – mit Animation
 - **Flügel (Wings)** – vollständig dynamisch: Geometrie, Textur, Animation und
-  Färbung werden zur Laufzeit geladen. Inklusive:
-  - Flügelschlag-Animation mit dynamischer Beschleunigung
-  - pro-Federreihe-Färbung anhand der getragenen Farben
-  - korrekte Positionierung auch beim Ducken
-  - funktioniert für unterschiedlich aufgebaute Flügel-Modelle
-
-Aktuell werden nur die Cosmetics des lokalen Spielers dargestellt.
+  Färbung werden zur Laufzeit geladen, inkl. Flügelschlag-Animation, Färbung
+  pro Federreihe und korrekter Positionierung beim Ducken
+- **Mehrspieler** – Cosmetics werden auch für andere Spieler dargestellt,
+  nicht nur für einen selbst (bisher mit zwei Spielern getestet)
 
 ## Technischer Aufbau
 
@@ -53,5 +50,7 @@ zeichnen.
 
 ## Status
 
-In Entwicklung. Cape und Flügel funktionieren; weitere Cosmetic-Typen und die
-Darstellung anderer Spieler sind mögliche nächste Schritte.
+In Entwicklung. Cape und Flügel funktionieren, für den lokalen Spieler und für
+andere Spieler. Der Mehrspieler-Betrieb wurde bisher nur mit zwei Spielern
+getestet, nicht mit größeren Zahlen. Weitere Cosmetic-Typen sind ein möglicher
+nächster Schritt.
