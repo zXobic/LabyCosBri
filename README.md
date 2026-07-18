@@ -14,15 +14,12 @@ interfaces.
 
 ## Features
 
-- **Capes / Cloaks** – with animations
+- **Capes / Cloaks** – with animation
 - **Wings** – fully dynamic: geometry, texture, animation and coloring are
-  loaded at runtime. Including:
-  - wing-flap animation with dynamic acceleration
-  - per-feather-row coloring based on the worn colors
-  - correct positioning even while sneaking
-  - works for differently structured wing models
-
-Currently only the local player's cosmetics are displayed.
+  loaded at runtime, including wing-flap animation, per-feather-row coloring,
+  and correct positioning while sneaking
+- **Multiplayer** – cosmetics are shown for other players too, not just
+  yourself
 
 ## Technical Overview
 
@@ -51,5 +48,6 @@ body part.
 
 ## Status
 
-In development. Capes and wings are working; additional cosmetic types and
-displaying other players are possible next steps.
+In development. Capes and wings are working, for the local player and for other
+players. Multiplayer has so far only been tested with two players, not with
+larger numbers. Additional cosmetic types are a possible next step.

@@ -31,7 +31,7 @@ public final class WingAnimationController {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     /** TEST: jeder Zustandswechsel und jede -p Ziehung ins Log. */
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = false;
 
     /** TEST: erzwingt einen Clip fuer alle Dauerzustaende. null = aus. */
     private static final String TEST_FORCE_CLIP = null;

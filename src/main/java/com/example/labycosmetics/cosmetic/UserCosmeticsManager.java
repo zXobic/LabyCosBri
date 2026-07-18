@@ -53,6 +53,18 @@ public final class UserCosmeticsManager {
     }
 
     /**
+     * Verwirft alle geladenen Trage-Daten. Der naechste getWorn/
+     * findWornByCategory-Aufruf stoesst dann pro Spieler ein frisches Laden
+     * an. Wird beim Server-Join gerufen, damit nach einem (Re)Connect der
+     * aktuelle Trage-Zustand gilt statt eines eingefrorenen von vorher.
+     */
+    public static void invalidateAll() {
+        STATE.clear();
+        WORN.clear();
+        LabyCosmeticsMod.LOGGER.info("[LabyCosmetics] Trage-Cache geleert (Server-Join).");
+    }
+
+    /**
      * Gibt das getragene Cosmetic dieser ID zurueck, falls der Spieler es
      * traegt und die Daten schon geladen sind. Stoesst andernfalls einmalig
      * das Laden an und gibt vorerst {@code null} zurueck.

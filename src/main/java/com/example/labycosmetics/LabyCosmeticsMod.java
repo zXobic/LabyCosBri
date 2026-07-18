@@ -28,10 +28,23 @@ public class LabyCosmeticsMod {
         // Render-Layer an bestehende Entity-Renderer (hier: Spieler) anzuhaengen.
         modEventBus.addListener(this::onAddLayers);
         modEventBus.addListener(this::onClientSetup);
+
+        // Game-Bus (NeoForge.EVENT_BUS), NICHT der Mod-Bus oben: das Join-Event
+        // wird dort gefeuert. Beim (Re)Connect die Trage- und Cape-Caches leeren,
+        // damit der aktuelle Zustand vom Server gilt statt eines eingefrorenen.
+        NeoForge.EVENT_BUS.addListener(LabyCosmeticsMod::onClientLoggingIn);
     }
 
     private void onClientSetup(FMLClientSetupEvent event) {
         LOGGER.info("[LabyCosmetics] Client-Setup abgeschlossen.");
+    }
+
+    // static, weil per Methodenreferenz am Game-Bus registriert (NeoForge-Doku).
+    private static void onClientLoggingIn(
+            net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn event) {
+        com.example.labycosmetics.cosmetic.UserCosmeticsManager.invalidateAll();
+        com.example.labycosmetics.client.CapeTextureManager.invalidateAll();
+        com.example.labycosmetics.render.WingRenderLayer.invalidateAll();
     }
 
     private void onAddLayers(EntityRenderersEvent.AddLayers event) {

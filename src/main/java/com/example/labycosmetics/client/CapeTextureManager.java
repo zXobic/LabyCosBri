@@ -31,6 +31,23 @@ public final class CapeTextureManager {
     }
 
     /**
+     * Verwirft den Ladezustand aller Capes. Der naechste getCapeTexture-
+     * Aufruf laedt dann pro Spieler frisch. Wird beim Server-Join gerufen,
+     * damit nach einem (Re)Connect nicht die Cape-Textur vom vorigen Server
+     * haengenbleibt.
+     *
+     * Die bereits beim Minecraft-TextureManager registrierten DynamicTextures
+     * werden bewusst NICHT einzeln freigegeben: das duerfte nur auf dem
+     * Render-Thread passieren, hier laufen wir aber im Join-Event. Ein neues
+     * Cape registriert sich unter derselben ResourceLocation (capes/{uuid})
+     * und ueberschreibt die alte Registrierung - kein wachsendes Leck.
+     */
+    public static void invalidateAll() {
+        CACHE.clear();
+        LabyCosmeticsMod.LOGGER.info("[LabyCosmetics] Cape-Cache geleert (Server-Join).");
+    }
+
+    /**
      * Gibt die ResourceLocation der Cape-Textur zurueck, falls bereits geladen.
      * Stoesst andernfalls (einmalig) das Herunterladen an und gibt currently
      * {@code null} zurueck, bis der Download abgeschlossen ist.

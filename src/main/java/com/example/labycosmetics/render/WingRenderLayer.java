@@ -12,7 +12,6 @@ import com.example.labycosmetics.cosmetic.UserCosmeticsManager;
 import com.example.labycosmetics.cosmetic.WingAnimationController;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.PlayerModel;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -22,24 +21,39 @@ import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.resources.ResourceLocation;
 
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Rendert das getragene WING-Cosmetic des lokalen Spielers dynamisch, inklusive
- * Animation und pro-Federreihe-Faerbung aus der userdata.
- */
+
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
     /** TEST: feste Wing-ID statt der getragenen; Textur dann aus meta.defaultData(). 0 = aus. */
     private static final int TEST_WING_ID = 0;
 
-    /**
-     * TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
-     * zwingend, sonst vergleicht man die eigene animierte Pose gegen dessen Ruhepose.
-     */
+    
+    //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
     private static final boolean TEST_NO_ANIMATION = false;
 
-    /** Nur der lokale Spieler wird gerendert, eine Instanz reicht. Sonst: Map<UUID, ...>. */
-    private final WingAnimationController controller = new WingAnimationController();
+    /**
+     * Ein Controller pro Spieler-UUID: der Animationszustand (clip, clipTime,
+     * Queue, lastCycle) liegt in Instanzfeldern, also braucht jeder Spieler
+     * seine eigene Instanz, sonst ueberschreiben sich die Zyklen gegenseitig.
+     * Der Layer selbst existiert nur pro Skin-Modell (slim/default), nicht pro
+     * Spieler - deshalb die Map hier und nicht ein Feld pro Layer.
+     * Wird beim Server-Join geleert (siehe LabyCosmeticsMod.onClientLoggingIn).
+     */
+    private static final Map<UUID, WingAnimationController> CONTROLLERS = new ConcurrentHashMap<>();
+
+    /**
+     * Verwirft alle Per-Spieler-Controller. Beim naechsten Frame legt
+     * computeIfAbsent sie frisch an. Wird beim Server-Join gerufen, damit die
+     * Map nicht ueber Serverwechsel hinweg mit toten Spielern volllaeuft -
+     * konsistent zu den Cache-Invalidierungen der Manager.
+     */
+    public static void invalidateAll() {
+        CONTROLLERS.clear();
+    }
 
     public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
@@ -51,12 +65,13 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                        AbstractClientPlayer player, float limbSwing, float limbSwingAmount,
                        float partialTicks, float ageInTicks, float netHeadYaw, float headPitch) {
 
-        var localPlayer = Minecraft.getInstance().player;
-        if (localPlayer == null || !player.getUUID().equals(localPlayer.getUUID())) {
-            return;
-        }
-
         CosmeticCatalog.ensureLoading();
+
+        // Pro Spieler ein eigener Controller (der Zustand liegt in Instanzfeldern).
+        // computeIfAbsent: beim ersten Frame eines Spielers wird seine Instanz
+        // angelegt, danach immer dieselbe wiederverwendet.
+        WingAnimationController controller =
+                CONTROLLERS.computeIfAbsent(player.getUUID(), uuid -> new WingAnimationController());
 
         Integer wingId = UserCosmeticsManager.findWornByCategory(player.getUUID(), "WING");
         if (TEST_WING_ID != 0) {
