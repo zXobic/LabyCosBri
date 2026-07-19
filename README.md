@@ -51,3 +51,14 @@ body part.
 In development. Capes and wings are working, for the local player and for other
 players. Multiplayer has so far only been tested with two players, not with
 larger numbers. Additional cosmetic types are a possible next step.
+
+## License
+
+The source code of this project is licensed under the
+[GNU GPL v3.0](LICENSE) (`GPL-3.0-only`).
+
+The license covers the **code only**. The displayed cosmetics (geometry,
+textures, animations, capes) are **not** included in this project — they are
+fetched at runtime from publicly accessible endpoints and remain the property
+of their respective rights holders (incl. LabyMedia GmbH and/or the creators).
+See [NOTICE](NOTICE) for details.
