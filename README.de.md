@@ -54,3 +54,14 @@ In Entwicklung. Cape und Flügel funktionieren, für den lokalen Spieler und fü
 andere Spieler. Der Mehrspieler-Betrieb wurde bisher nur mit zwei Spielern
 getestet, nicht mit größeren Zahlen. Weitere Cosmetic-Typen sind ein möglicher
 nächster Schritt.
+
+## Lizenz
+
+Der Quellcode dieses Projekts steht unter der
+[GNU GPL v3.0](LICENSE) (`GPL-3.0-only`).
+
+Die Lizenz gilt **nur für den Code**. Die dargestellten Cosmetics (Geometrie,
+Texturen, Animationen, Capes) sind **nicht** Teil dieses Projekts — sie werden
+zur Laufzeit von öffentlich erreichbaren Endpunkten geladen und bleiben
+Eigentum der jeweiligen Rechteinhaber (u. a. LabyMedia GmbH bzw. der Ersteller).
+Details in [NOTICE](NOTICE).
