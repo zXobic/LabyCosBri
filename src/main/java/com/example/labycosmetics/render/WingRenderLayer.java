@@ -65,8 +65,13 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
     /**
      * Verwirft alle Per-Spieler-Controller. Beim naechsten Frame legt
      * computeIfAbsent sie frisch an. Wird beim Server-Join gerufen, damit die
-     * Map nicht ueber Serverwechsel hinweg mit toten Spielern volllaeuft -
-     * konsistent zu den Cache-Invalidierungen der Manager.
+     * Map nicht ueber Serverwechsel hinweg mit toten Spielern volllaeuft.
+     * <p>
+     * BEWUSST kein Einzel-Aufraeumen im render()-Pfad: der laeuft pro Frame und
+     * muesste "lebt der Spieler noch?" raten - bei Fehlgriff wird ein LEBENDER
+     * Controller verworfen (Animations-Reset, Zucken). Preis fuers Weglassen:
+     * ein toter Controller pro waehrend der Session gegangenem Spieler, weg beim
+     * naechsten Join. Winziger Speicher gegen kein Regressionsrisiko.
      */
     public static void invalidateAll() {
         CONTROLLERS.clear();
@@ -114,7 +119,9 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             return;
         }
 
-        ResourceLocation texture = CosmeticTextureManager.getTexture(meta.textureDirectory(), textureUuid);
+        ResourceLocation texture = CosmeticTextureManager.getTexture(
+                meta.textureDirectory(), textureUuid,
+                meta.frameAspectWidth(), meta.frameAspectHeight());
         if (texture == null) {
             return;
         }
@@ -183,9 +190,19 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             restColor = color0;
         }
 
-        CosmeticColorRenderer.renderColored(poseStack, consumer, packedLight,
+        // Umgebungslicht stabil auf STEH-Augenhoehe sampeln, nicht auf der gesneakten:
+        // Vanilla sampelt an Fuss + Augenhoehe*0.7; beim Ducken sinkt die Augenhoehe,
+        // die Licht-Probe rutscht in einen tieferen (oft dunkleren) Block -> Modell
+        // dunkelte beim Sneaken ab. blockPosition().above() ist der Block auf Steh-
+        // Augenhoehe: aendert sich beim Ducken nicht, reagiert aber weiter auf
+        // Umgebungslicht (Sonne/Hoehle).
+        int stableLight = net.minecraft.client.renderer.LevelRenderer.getLightColor(
+                player.level(), player.blockPosition().above());
+
+        CosmeticColorRenderer.renderColored(poseStack, consumer, stableLight,
                 built.root(), built.bonesByName(), built.geometry(),
-                color0, color1, color2, restColor);
+                color0, color1, color2, restColor,
+                buffer, texture);
 
         poseStack.popPose();
     }

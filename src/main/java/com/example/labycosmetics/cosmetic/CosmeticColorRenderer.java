@@ -18,8 +18,10 @@
 package com.example.labycosmetics.cosmetic;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.logging.LogUtils;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 
 import java.util.HashMap;
@@ -44,7 +46,61 @@ import java.util.Map;
  */
 public final class CosmeticColorRenderer {
 
+    private static final org.slf4j.Logger LOGGER = LogUtils.getLogger();
+
+    /** TEST: Glow-Pass aus -> alles normal beleuchtet. Fuer den A/B-Vergleich
+     *  am selben Wing (1460 oder 855) im Dunkeln. */
+    private static final boolean TEST_NO_GLOW = false;
+
+    /**
+     * Glueht dieser Bone? Wahr, wenn er selbst oder ein VORFAHRE mit "glow"
+     * beginnt - dieselbe Ketten-Vererbung wie bei der Farbe, weil der Effekt
+     * laut Doku "on its children" wirkt (855: glow_plane7 -> color_0_a, der
+     * FLAECHEN-tragende color-Bone haengt UNTER dem glow-Bone).
+     * <p>
+     * WICHTIG - Doku vs. Material: Die offizielle Glow-Doku beschreibt einen
+     * Vierteiler glow_STAERKE_FARBE_NAME. Ein Katalog-Scan ueber alle 203
+     * glow-Bones zeigt AUSNAHMSLOS den Zweiteiler glow_NAME - Staerke und Farbe
+     * sind im Material NICHT kodiert. Deshalb emissiv ohne Parameter. Glow ist
+     * orthogonal zur Farbe: der Bone behaelt seine Farbklasse, nur das Licht
+     * geht auf Maximum.
+     */
+    private static boolean glowsWithInheritance(String boneName, BedrockGeometry geo) {
+        String current = boneName;
+        int guard = 0;
+        while (current != null && guard++ < 100) {
+            if (current.startsWith("glow") && !isRootBone(current, geo)) {
+                return true;
+            }
+            current = parentOf(current, geo);
+        }
+        return false;
+    }
+
     private CosmeticColorRenderer() {
+    }
+
+    /**
+     * Ein glow-Bone zaehlt NUR als Effekt, wenn er nicht die Wurzel ist.
+     * <p>
+     * Beleg (geo.json von zwei Wings): 855 hat die glow-Bones MITTEN in der
+     * Kette (bone7 -> glow_plane7 -> color_0_a), dort ist die Vererbung auf die
+     * Kinder gewollt. 1460 dagegen heisst der WURZEL-Bone "glow_main" - das ist
+     * ein Struktur-Name, kein Effekt; wuerde er zaehlen, gluehte das ganze
+     * Modell (Log zeigte "33 von 33"). Regel: Wurzel-glow ignorieren.
+     * <p>
+     * UNGEMESSEN/BEWUSST: nur an 855 + 1460 geo-belegt. Ein Wing mit ECHTEM
+     * Glow direkt am Wurzel-Bone bliebe dunkel - kein bekannter Fall. Der
+     * verworfene Wurzel-glow wird in renderColored geloggt, damit ein solcher
+     * Fall im Log auffaellt statt still falsch zu sein.
+     */
+    private static boolean isRootBone(String boneName, BedrockGeometry geo) {
+        for (BedrockGeometry.Bone b : geo.bones) {
+            if (b.name.equals(boneName)) {
+                return b.parent == null;
+            }
+        }
+        return false;
     }
 
     /** Wandelt einen Hex-String wie "8c8989" in ein float[3] mit r,g,b in 0..1. */
@@ -97,19 +153,67 @@ public final class CosmeticColorRenderer {
                                      int packedLight, ModelPart root,
                                      Map<String, ModelPart> bones, BedrockGeometry geo,
                                      float[] color0, float[] color1,
-                                     float[] color2, float[] restColor) {
+                                     float[] color2, float[] restColor,
+                                     net.minecraft.client.renderer.MultiBufferSource buffer,
+                                     net.minecraft.resources.ResourceLocation texture) {
 
         Map<String, ColorClass> classOf = new HashMap<>();
+        Map<String, Boolean> glowOf = new HashMap<>();
+        int glowCount = 0;
         for (String name : bones.keySet()) {
             classOf.put(name, classifyWithInheritance(name, geo));
+            boolean g = !TEST_NO_GLOW && glowsWithInheritance(name, geo);
+            glowOf.put(name, g);
+            if (g) {
+                glowCount++;
+            }
         }
+        // Pruefstein: >0 fuer Glow-Wings (855, 1460), 0 fuer die Gegenprobe
+        // (24, 404). "kein Glow" und "Glow-Erkennung kaputt" saehen sonst
+        // gleich aus. Einmal pro render() - okay fuers Debuggen, spaeter still.
+        // Wurzel-glow-Bones getrennt zaehlen: die werden bewusst NICHT als
+        // Effekt gewertet (Struktur-Name wie 1460 "glow_main"). Taucht hier
+        // eine Zahl >0 auf und der Wing bleibt trotzdem komplett dunkel, ist
+        // das der Hinweis auf einen echten Wurzel-glow, den die Regel verwirft.
+        int rootGlow = 0;
+        for (String name : bones.keySet()) {
+            if (name.startsWith("glow") && isRootBone(name, geo)) {
+                rootGlow++;
+            }
+        }
+        LOGGER.debug("[LabyCos] Glow: {} von {} Bones gluehen, {} Wurzel-glow verworfen",
+                glowCount, bones.size(), rootGlow);
 
-        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C0, color0);
-        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C1, color1);
+        // Durchgang A - normale Farbe, ganzes Modell (glow-Teile inklusive, damit
+        // sie ihre Grundfarbe/Form behalten).
+        // consumer in einen FlatNormalConsumer wickeln: der zwingt jede Vertex-Normale
+        // auf einen festen Wert, damit die Vanilla-Richtungsschattierung KONSTANT ist
+        // und nicht mehr auf die Sneak-Neigung reagiert (Flaechen wurden sonst dunkler).
+        // Lichtkarte (packedLight) bleibt unberuehrt -> Hoehle/Nacht dunkeln weiterhin.
+        VertexConsumer flat = new FlatNormalConsumer(consumer);
+        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C0, color0);
+        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C1, color1);
         if (color2 != null) {
-            renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.C2, color2);
+            renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C2, color2);
         }
-        renderPass(poseStack, consumer, packedLight, root, bones, classOf, ColorClass.REST, restColor);
+        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.REST, restColor);
+
+        // Durchgang B - GLOW: die gluehenden Bones nochmal emissiv obendrauf.
+        // entityTranslucentEmissive, NICHT eyes: eyes ignoriert das Alpha der
+        // Textur und leuchtet das ganze Cube-Rechteck aus - das Glow blutet dann
+        // ueber die Feder-Form hinaus (an 855 gesehen). entityTranslucentEmissive
+        // respektiert Alpha UND leuchtet. Eigener Consumer aus demselben buffer,
+        // Farbe der jeweiligen Farbklasse (blauer Stern strahlt blau, nicht weiss).
+        if (glowCount > 0) {
+            VertexConsumer glowConsumer = new FlatNormalConsumer(
+                    buffer.getBuffer(net.minecraft.client.renderer.RenderType.entityTranslucentEmissive(texture)));
+            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C0, color0);
+            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C1, color1);
+            if (color2 != null) {
+                glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C2, color2);
+            }
+            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.REST, restColor);
+        }
 
         for (ModelPart part : bones.values()) {
             part.skipDraw = false;
@@ -131,6 +235,36 @@ public final class CosmeticColorRenderer {
         int packedColor = packColor(rgb);
         root.render(poseStack, consumer, packedLight, OverlayTexture.NO_OVERLAY, packedColor);
     }
+    /**
+     * Zeichnet NUR die gluehenden Bones der gewuenschten Farbklasse, ueber den
+     * emissiven Consumer. packedLight ist hier egal, weil der emissive Typ das
+     * Licht ohnehin ignoriert - wir geben FULL_BRIGHT der Form halber.
+     * Laeuft zusaetzlich zum normalen Durchgang, daher "strahlt" der Teil auf,
+     * statt ihn nur zu ersetzen.
+     */
+    private static void glowPass(PoseStack poseStack, VertexConsumer glowConsumer,
+                                 ModelPart root, Map<String, ModelPart> bones,
+                                 Map<String, ColorClass> classOf,
+                                 Map<String, Boolean> glowOf,
+                                 ColorClass wanted, float[] rgb) {
+        if (rgb == null) {
+            return;
+        }
+        boolean any = false;
+        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
+            String name = entry.getKey();
+            boolean draw = classOf.get(name) == wanted && Boolean.TRUE.equals(glowOf.get(name));
+            entry.getValue().skipDraw = !draw;
+            if (draw) {
+                any = true;
+            }
+        }
+        if (any) {
+            int packedColor = packColor(rgb);
+            root.render(poseStack, glowConsumer, LightTexture.FULL_BRIGHT,
+                    OverlayTexture.NO_OVERLAY, packedColor);
+        }
+    }
 
     private static int packColor(float[] rgb) {
         int a = 255;
@@ -138,5 +272,67 @@ public final class CosmeticColorRenderer {
         int g = Math.round(rgb[1] * 255f);
         int b = Math.round(rgb[2] * 255f);
         return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    /**
+     * VertexConsumer-Huelle, die alles unveraendert durchreicht - AUSSER der Normale:
+     * die wird auf einen festen Wert (0,1,0) gezwungen. Wirkung: Minecrafts
+     * richtungsabhaengige Schattierung (Diffuse) wird ueber das ganze Modell konstant
+     * und reagiert nicht mehr auf die Model-Drehung (Sneak-Neigung liess die Farben
+     * sonst abdunkeln). Die Lichtkarte (Umgebungshelligkeit) laeuft ueber setUv2 und
+     * bleibt unangetastet - Hoehle/Nacht dunkeln also weiterhin normal.
+     *
+     * Nur fuer Durchgang A (Basisfarbe). Der Glow-Pass ist emissiv und ohnehin
+     * schattierungsfrei.
+     *
+     * Wichtig: die durchreichenden Methoden geben {@code this} (die Huelle) zurueck,
+     * nicht das Delegate - sonst braeche die Aufruf-Kette aus der Huelle aus und
+     * setNormal wuerde nicht mehr abgefangen.
+     */
+    private record FlatNormalConsumer(VertexConsumer delegate) implements VertexConsumer {
+        @Override
+        public VertexConsumer addVertex(float x, float y, float z) {
+            delegate.addVertex(x, y, z);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setColor(int red, int green, int blue, int alpha) {
+            delegate.setColor(red, green, blue, alpha);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv(float u, float v) {
+            delegate.setUv(u, v);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv1(int u, int v) {
+            delegate.setUv1(u, v);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setUv2(int u, int v) {
+            delegate.setUv2(u, v);
+            return this;
+        }
+
+        @Override
+        public VertexConsumer setNormal(float normalX, float normalY, float normalZ) {
+            delegate.setNormal(0.0F, 1.0F, 0.0F);
+            return this;
+        }
+
+        // ModelPart nutzt die Pose-Ueberladung, die die Normale VOR dem Schreiben durch
+        // die Pose-Matrix (inkl. Sneak-Drehung) transformiert. Auch die abfangen und fest
+        // (0,1,0) schreiben - sonst dreht die Sneak-Neigung die Normale doch wieder mit.
+        @Override
+        public VertexConsumer setNormal(PoseStack.Pose pose, float normalX, float normalY, float normalZ) {
+            delegate.setNormal(0.0F, 1.0F, 0.0F);
+            return this;
+        }
     }
 }

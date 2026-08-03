@@ -183,9 +183,14 @@ public final class BedrockAnimationParser {
                 case "-q" -> clip.queued = parseFlagBool(value, "-q", clipName);
                 case "-f" -> clip.force = parseFlagBool(value, "-f", clipName);
                 default -> {
-                    // Werte-Token (z.B. "IDLE,MOVING") landen hier ebenfalls.
-                    // Nur echte Flags melden: "-x" mit einem Buchstaben.
-                    if (tok[i].length() == 2 && tok[i].charAt(0) == '-'
+                    /* Werte-Token (z.B. "IDLE,MOVING", "true", "5") landen hier
+                     ebenfalls - die beginnen aber nie mit "-<Buchstabe>". Ein
+                     Token, das mit "-" und einem Buchstaben anfaengt, ist dagegen
+                     ein echtes, hier nicht behandeltes Flag. Bewusst length() >= 2
+                     statt == 2, damit auch mehrbuchstabige Flags gemeldet werden:
+                     "-lr" (Lizard 1905) fiel bei == 2 still durch und strafte den
+                     Methodenkommentar oben Luegen ("werden geloggt").*/
+                    if (tok[i].length() >= 2 && tok[i].charAt(0) == '-'
                             && Character.isLetter(tok[i].charAt(1))) {
                         LOGGER.warn("[LabyCos] Clip '{}': unbekanntes Flag '{}' ({})",
                                 clipName, tok[i], s);

@@ -51,7 +51,9 @@ public final class CosmeticCatalog {
             String position,          // BACK, HEAD_TOP, ... (kann null sein)
             String textureDirectory,  // z.B. "1460" (kann null sein)
             float scale,
-            java.util.List<String> defaultData) {   // [textur-uuid, farbe1, ...]
+            java.util.List<String> defaultData,   // [textur-uuid, farbe1, ...]
+            int frameAspectWidth,     // frame_aspect_ratio.width  (Frame-Seitenverhaeltnis)
+            int frameAspectHeight) {  // frame_aspect_ratio.height
     }
 
     private enum State { NOT_STARTED, LOADING, LOADED, FAILED }
@@ -137,7 +139,21 @@ public final class CosmeticCatalog {
                 }
             }
 
-            CATALOG.put(id, new CosmeticMeta(id, category, position, textureDir, scale, defaultData));
+            // frame_aspect_ratio gibt die FORM eines einzelnen Animations-Frames an
+            // (z.B. 128:64 = Frame doppelt so breit wie hoch). Fehlt es, nehmen wir 1:1
+            // (quadratisch). Wird zum korrekten Zerschneiden von Sprite-Sheets gebraucht
+            // - siehe CosmeticTextureManager.
+            int frameW = 1, frameH = 1;
+            if (obj.has("frame_aspect_ratio") && obj.get("frame_aspect_ratio").isJsonObject()) {
+                JsonObject far = obj.getAsJsonObject("frame_aspect_ratio");
+                if (far.has("width"))  { frameW = far.get("width").getAsInt(); }
+                if (far.has("height")) { frameH = far.get("height").getAsInt(); }
+                if (frameW <= 0) { frameW = 1; }
+                if (frameH <= 0) { frameH = 1; }
+            }
+
+            CATALOG.put(id, new CosmeticMeta(
+                    id, category, position, textureDir, scale, defaultData, frameW, frameH));
         }
     }
 
