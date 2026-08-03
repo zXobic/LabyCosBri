@@ -1,0 +1,36 @@
+Cosmetic Bridge LabyCosBri
+Copyright (C) 2026  zXobic
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full license text.
+
+
+== Scope of this license ==
+
+The GPL-3.0 license applies ONLY to the source code of this project (the Java
+code written for this mod). It does NOT grant any rights to the cosmetic
+content this mod displays.
+
+
+== Third-party content ==
+
+This mod does not contain, bundle, or redistribute any LabyMod cosmetics. All
+displayed cosmetics — including their geometry, textures, animations, and
+capes/cloaks — are fetched at runtime from publicly accessible endpoints and
+remain the intellectual property of their respective rights holders (including
+LabyMedia GmbH and/or the individual creators).
+
+Nothing in this project transfers, sublicenses, or otherwise conveys any rights
+to that content. If you distribute or fork this project, the GPL-3.0 covers the
+code only; the cosmetic assets are not yours (or mine) to license.
+
+
+== No affiliation ==
+
+This project is a private, unofficial community project and has no connection
+to LabyMod / LabyMedia GmbH. It is merely compatible with publicly accessible
+interfaces, which are unofficial and may change at any time. "LabyMod" and
+"LabyMedia" are trademarks of LabyMedia GmbH and are mentioned solely to
+describe compatibility.
