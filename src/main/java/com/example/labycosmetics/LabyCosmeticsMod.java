@@ -61,7 +61,7 @@ public class LabyCosmeticsMod {
             net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingIn event) {
         com.example.labycosmetics.cosmetic.UserCosmeticsManager.invalidateAll();
         com.example.labycosmetics.client.CapeTextureManager.invalidateAll();
-        com.example.labycosmetics.render.WingRenderLayer.invalidateAll();
+        com.example.labycosmetics.render.CosmeticRenderLayer.invalidateAll();
     }
 
     private void onAddLayers(EntityRenderersEvent.AddLayers event) {
@@ -69,7 +69,7 @@ public class LabyCosmeticsMod {
             var renderer = event.getSkin(skin);
             if (renderer instanceof net.minecraft.client.renderer.entity.player.PlayerRenderer playerRenderer) {
             playerRenderer.addLayer(new LabyCapeLayer(playerRenderer));
-            playerRenderer.addLayer(new com.example.labycosmetics.render.WingRenderLayer(playerRenderer));
+            playerRenderer.addLayer(new com.example.labycosmetics.render.CosmeticRenderLayer(playerRenderer));
             LOGGER.info("[LabyCosmetics] Cape-Layer fuer Skin '{}' registriert.", skin);
             }
         }

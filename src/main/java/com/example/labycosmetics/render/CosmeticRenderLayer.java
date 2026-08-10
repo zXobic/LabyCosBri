@@ -26,7 +26,7 @@ import com.example.labycosmetics.cosmetic.CosmeticCatalog;
 import com.example.labycosmetics.cosmetic.CosmeticColorRenderer;
 import com.example.labycosmetics.cosmetic.CosmeticGeometryManager;
 import com.example.labycosmetics.cosmetic.UserCosmeticsManager;
-import com.example.labycosmetics.cosmetic.WingAnimationController;
+import com.example.labycosmetics.cosmetic.CosmeticAnimationController;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.minecraft.client.model.PlayerModel;
@@ -43,7 +43,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 
-public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
+public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
     /**
      * TEST: feste Cosmetic-IDs statt der getragenen; Texturen dann aus meta.defaultData().
@@ -70,7 +70,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
      * Spieler - deshalb die Map hier und nicht ein Feld pro Layer.
      * Wird beim Server-Join geleert (siehe LabyCosmeticsMod.onClientLoggingIn).
      */
-    private static final Map<ControllerKey, WingAnimationController> CONTROLLERS = new ConcurrentHashMap<>();
+    private static final Map<ControllerKey, CosmeticAnimationController> CONTROLLERS = new ConcurrentHashMap<>();
 
     /** Schluessel fuer CONTROLLERS: ein Animationszustand je Spieler UND Cosmetic,
      *  damit Wing und Aura sich den Zustand nicht teilen. */
@@ -92,7 +92,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
         CONTROLLERS.clear();
     }
 
-    public WingRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
+    public CosmeticRenderLayer(RenderLayerParent<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> parent) {
         super(parent);
     }
 
@@ -127,8 +127,8 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
 
         // Ein Controller je (Spieler + Cosmetic): der Animationszustand liegt in
         // Instanzfeldern, Wing und Aura duerfen sich den nicht teilen.
-        WingAnimationController controller = CONTROLLERS.computeIfAbsent(
-                new ControllerKey(player.getUUID(), cosmeticId), k -> new WingAnimationController());
+        CosmeticAnimationController controller = CONTROLLERS.computeIfAbsent(
+                new ControllerKey(player.getUUID(), cosmeticId), k -> new CosmeticAnimationController());
 
         var meta = CosmeticCatalog.get(cosmeticId);
         if (meta == null || meta.textureDirectory() == null) {
@@ -169,7 +169,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             // Tippfehler MOVING_FORWARD bei 1689), MOTION_BACKWARDS nur bei
             // 1689 [ARMS] - kein Wing. Damit UNGEMESSEN und bewusst offen.
             var world = new BedrockAnimation.WorldState(
-                    WingAnimationController.isMoving(limbSwingAmount),
+                    CosmeticAnimationController.isMoving(limbSwingAmount),
                     player.isCrouching(),
                     player.onGround(),
                     player.isInWater(),

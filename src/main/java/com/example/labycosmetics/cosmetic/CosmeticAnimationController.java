@@ -43,7 +43,7 @@ import java.util.TreeSet;
  *
  * <p>Haelt den Zustand EINES Spielers mit EINEM Wing.
  */
-public final class WingAnimationController {
+public final class CosmeticAnimationController {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
