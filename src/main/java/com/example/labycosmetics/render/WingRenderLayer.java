@@ -45,12 +45,22 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerModel<AbstractClientPlayer>> {
 
-    /** TEST: feste Wing-ID statt der getragenen; Textur dann aus meta.defaultData(). 0 = aus. */
-    private static final int TEST_WING_ID = 0;
+    /**
+     * TEST: feste Cosmetic-IDs statt der getragenen; Texturen dann aus meta.defaultData().
+     * LEER = aus (Normalbetrieb). Fuer den Dev-Client, der keine getragenen Cosmetics
+     * kennt (Offline-UUID -> userdata 404). Mehrere IDs = Mehrfach-Rendering testen,
+     * z.B. List.of(1460, 328, 1) fuer Angel Wings V2 + Leaves Aura + Tail.
+     * ACHTUNG vor Release wieder leeren - sonst tragen ALLE Spieler diese Cosmetics.
+     */
+    private static final List<Integer> TEST_COSMETIC_IDS = List.of();
 
     
     //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
     private static final boolean TEST_NO_ANIMATION = false;
+
+    /** Kategorien, die dieser Layer rendert. Alle BODY-gebunden, laufen durch dieselbe
+     *  TYPE_BOUND-Pipeline. UNDERGLOW fehlt bewusst (braucht erst den Layers-Effekt). */
+    private static final java.util.Set<String> SUPPORTED_CATEGORIES = java.util.Set.of("WING", "AURA", "BACK");
 
     /**
      * Ein Controller pro Spieler-UUID: der Animationszustand (clip, clipTime,
@@ -60,7 +70,12 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
      * Spieler - deshalb die Map hier und nicht ein Feld pro Layer.
      * Wird beim Server-Join geleert (siehe LabyCosmeticsMod.onClientLoggingIn).
      */
-    private static final Map<UUID, WingAnimationController> CONTROLLERS = new ConcurrentHashMap<>();
+    private static final Map<ControllerKey, WingAnimationController> CONTROLLERS = new ConcurrentHashMap<>();
+
+    /** Schluessel fuer CONTROLLERS: ein Animationszustand je Spieler UND Cosmetic,
+     *  damit Wing und Aura sich den Zustand nicht teilen. */
+    private record ControllerKey(UUID player, int cosmeticId) {
+    }
 
     /**
      * Verwirft alle Per-Spieler-Controller. Beim naechsten Frame legt
@@ -89,27 +104,39 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
 
         CosmeticCatalog.ensureLoading();
 
-        // Pro Spieler ein eigener Controller (der Zustand liegt in Instanzfeldern).
-        // computeIfAbsent: beim ersten Frame eines Spielers wird seine Instanz
-        // angelegt, danach immer dieselbe wiederverwendet.
-        WingAnimationController controller =
-                CONTROLLERS.computeIfAbsent(player.getUUID(), uuid -> new WingAnimationController());
-
-        Integer wingId = UserCosmeticsManager.findWornByCategory(player.getUUID(), "WING");
-        if (TEST_WING_ID != 0) {
-            wingId = TEST_WING_ID;
-        }
-        if (wingId == null) {
-            return;
+        // Welche Cosmetics rendern? Im Test-Modus die feste ID, sonst alle getragenen
+        // in den unterstuetzten Kategorien (Wing, Aura). Ein Spieler kann mehrere
+        // gleichzeitig tragen - deshalb eine Liste und die Schleife.
+        List<Integer> ids;
+        if (!TEST_COSMETIC_IDS.isEmpty()) {
+            ids = TEST_COSMETIC_IDS;
+        } else {
+            ids = UserCosmeticsManager.findAllWornByCategories(player.getUUID(), SUPPORTED_CATEGORIES);
         }
 
-        var meta = CosmeticCatalog.get(wingId);
+        for (int cosmeticId : ids) {
+            renderOne(cosmeticId, poseStack, buffer, packedLight, player, limbSwingAmount, partialTicks);
+        }
+    }
+
+    /** Rendert genau ein Cosmetic (Wing, Aura, ...). Frueher der Rumpf von render();
+     *  jetzt pro getragenem Cosmetic in der Schleife aufgerufen. */
+    private void renderOne(int cosmeticId, PoseStack poseStack, MultiBufferSource buffer,
+                           int packedLight, AbstractClientPlayer player,
+                           float limbSwingAmount, float partialTicks) {
+
+        // Ein Controller je (Spieler + Cosmetic): der Animationszustand liegt in
+        // Instanzfeldern, Wing und Aura duerfen sich den nicht teilen.
+        WingAnimationController controller = CONTROLLERS.computeIfAbsent(
+                new ControllerKey(player.getUUID(), cosmeticId), k -> new WingAnimationController());
+
+        var meta = CosmeticCatalog.get(cosmeticId);
         if (meta == null || meta.textureDirectory() == null) {
             return;
         }
 
         // Getragene Daten, sonst die Standard-Daten aus dem Katalog (Test-Modus).
-        var worn = UserCosmeticsManager.getWorn(player.getUUID(), wingId);
+        var worn = UserCosmeticsManager.getWorn(player.getUUID(), cosmeticId);
         List<String> data = (worn != null) ? worn.data() : meta.defaultData();
         if (data == null || data.isEmpty()) {
             return;
@@ -126,14 +153,14 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
             return;
         }
 
-        BuiltCosmeticModel built = CosmeticGeometryManager.getModel(wingId);
+        BuiltCosmeticModel built = CosmeticGeometryManager.getModel(cosmeticId);
         if (built == null) {
             return;
         }
 
         // --- Animation anwenden ---
         if (!TEST_NO_ANIMATION) {
-            BedrockAnimation anim = CosmeticAnimationManager.getAnimation(wingId);
+            BedrockAnimation anim = CosmeticAnimationManager.getAnimation(cosmeticId);
             float now = (player.tickCount + partialTicks) / 20.0F;
             // limbSwingAmount laeuft weich aus - STOP_MOVING zuendet daher erst ein
             // paar Ticks nach dem Stehenbleiben.
@@ -148,7 +175,7 @@ public class WingRenderLayer extends RenderLayer<AbstractClientPlayer, PlayerMod
                     player.isInWater(),
                     false,
                     false);
-            controller.update(anim, wingId, world, now);
+            controller.update(anim, cosmeticId, world, now);
             // apply() setzt auch bei clip == null alle Bones auf die Ruhepose.
             BedrockAnimator.apply(built.root(), controller.clip(),
                     controller.clipTimeSeconds(), built.bonesByName());

@@ -15,9 +15,8 @@ interfaces.
 ## Features
 
 - **Capes / Cloaks** – with animation
-- **Wings** – fully dynamic: geometry, texture, animation and coloring are
-  loaded at runtime, including wing-flap animation, per-feather-row coloring,
-  and correct positioning while sneaking
+- **Wings / Aura / Tails** – fully dynamic: geometry, texture, animation and coloring are
+  loaded at runtime, including animation, coloring
 - **Multiplayer** – cosmetics are shown for other players too, not just
   yourself
 

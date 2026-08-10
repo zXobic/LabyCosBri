@@ -314,7 +314,31 @@ public final class WingAnimationController {
             s = steady(w);
             c = select(anim, s, w, false);
         }
+        // Sneak-Fallback: Viele Cosmetics definieren gar keine Sneak-Zustaende.
+        // 328 Leaves Aura hat nur "idle" und "move" - beim Sneaken faende select()
+        // nichts, apply() setzte die Ruhepose und die Blaetter blieben stehen.
+        // LabyMod laesst sie dort weiterwehen (nebeneinander verglichen), faellt also
+        // auf den Nicht-Sneak-Gegenpart zurueck. Genau das hier.
+        if (c == null) {
+            AnimState plain = withoutSneak(s);
+            if (plain != s) {
+                Clip fb = select(anim, plain, w, false);
+                if (fb != null) {
+                    return new Pick(plain, fb);
+                }
+            }
+        }
         return new Pick(s, c);
+    }
+
+    /** Sneak-Zustand -> sein Nicht-Sneak-Gegenpart; alles andere unveraendert. */
+    private static AnimState withoutSneak(AnimState s) {
+        return switch (s) {
+            case SNEAK_MOVING -> AnimState.MOVING;
+            case SNEAK_IDLE -> AnimState.IDLE;
+            case START_SNEAKING, STOP_SNEAKING -> AnimState.IDLE;
+            default -> s;
+        };
     }
 
     private void enter(AnimState s, BedrockAnimation anim, WorldState w) {

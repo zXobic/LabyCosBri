@@ -129,6 +129,35 @@ public final class UserCosmeticsManager {
         return null;
     }
 
+    /**
+     * Alle getragenen Cosmetics des Spielers, deren Kategorie in {@code categories}
+     * liegt. Fuer Layer, die mehrere Cosmetics gleichzeitig rendern (Wing + Aura + ...).
+     * Leere Liste, solange die Daten noch laden.
+     */
+    public static java.util.List<Integer> findAllWornByCategories(UUID playerUuid, java.util.Set<String> categories) {
+        State state = STATE.get(playerUuid);
+        if (state == null) {
+            STATE.put(playerUuid, State.LOADING);
+            requestUserData(playerUuid);
+            return java.util.List.of();
+        }
+        if (state != State.LOADED) {
+            return java.util.List.of();
+        }
+        Map<Integer, WornCosmetic> map = WORN.get(playerUuid);
+        if (map == null) {
+            return java.util.List.of();
+        }
+        java.util.List<Integer> result = new java.util.ArrayList<>();
+        for (Integer id : map.keySet()) {
+            CosmeticCatalog.CosmeticMeta meta = CosmeticCatalog.get(id);
+            if (meta != null && categories.contains(meta.category())) {
+                result.add(id);
+            }
+        }
+        return result;
+    }
+
     private static void requestUserData(UUID playerUuid) {
         String url = USERDATA_URL.formatted(playerUuid.toString());
 
