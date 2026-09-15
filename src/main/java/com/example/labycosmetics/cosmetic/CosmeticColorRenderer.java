@@ -155,18 +155,43 @@ public final class CosmeticColorRenderer {
                                      float[] color0, float[] color1,
                                      float[] color2, float[] restColor,
                                      net.minecraft.client.renderer.MultiBufferSource buffer,
-                                     net.minecraft.resources.ResourceLocation texture) {
+                                     net.minecraft.resources.ResourceLocation texture,
+                                     String textureUuid) {
+
+        // Layers-Effekt: Nur filtern, wenn es tatsaechlich MEHRERE Textur-Varianten
+        // gibt. Bei genau einem layer_-Ast (963, 855) gibt es nichts zu waehlen -
+        // der muss immer sichtbar bleiben, auch wenn die getragene UUID abweicht
+        // (im Dev-Client kommt sie aus defaultData und passt nie).
+        java.util.Set<String> variants = new java.util.HashSet<>();
+        for (BedrockGeometry.Bone b : geo.bones) {
+            String u = layerUuidOf(b.name);
+            if (u != null) {
+                variants.add(u);
+            }
+        }
+        boolean filterLayers = variants.size() > 1;
 
         Map<String, ColorClass> classOf = new HashMap<>();
         Map<String, Boolean> glowOf = new HashMap<>();
         int glowCount = 0;
+        int hidden = 0;
         for (String name : bones.keySet()) {
+            if (filterLayers && isHiddenLayer(name, geo, textureUuid)) {
+                classOf.put(name, null);
+                glowOf.put(name, false);
+                hidden++;
+                continue;
+            }
             classOf.put(name, classifyWithInheritance(name, geo));
             boolean g = !TEST_NO_GLOW && glowsWithInheritance(name, geo);
             glowOf.put(name, g);
             if (g) {
                 glowCount++;
             }
+        }
+        if (hidden > 0) {
+            LOGGER.debug("[LabyCos] Layers: {} von {} Bones ausgeblendet ({} Varianten)",
+                    hidden, bones.size(), variants.size());
         }
         // Pruefstein: >0 fuer Glow-Wings (855, 1460), 0 fuer die Gegenprobe
         // (24, 404). "kein Glow" und "Glow-Erkennung kaputt" saehen sonst
@@ -264,6 +289,59 @@ public final class CosmeticColorRenderer {
             root.render(poseStack, glowConsumer, LightTexture.FULL_BRIGHT,
                     OverlayTexture.NO_OVERLAY, packedColor);
         }
+    }
+
+    /**
+     * Die Textur-UUID aus einem {@code layer_<uuid>}-Bone-Namen, oder null wenn
+     * der Bone kein UUID-Layer ist. Suffixe wie "_rgb" oder "_2021" werden
+     * abgeschnitten; layer_slim / layer_right / layer_left liefern null (andere
+     * Faelle des Effekts, hier nicht behandelt).
+     */
+    private static String layerUuidOf(String boneName) {
+        if (!boneName.startsWith("layer_")) {
+            return null;
+        }
+        String rest = boneName.substring("layer_".length()).toLowerCase();
+        if (rest.length() < 32) {
+            return null;
+        }
+        String uuid = rest.substring(0, 32);
+        return uuid.matches("[0-9a-f]{32}") ? uuid : null;
+    }
+
+    /**
+     * Gehoert dieser Bone zu einer Textur-Variante, die NICHT getragen wird?
+     * <p>
+     * Layers-Effekt: Ein Cosmetic kann mehrere Varianten als getrennte
+     * {@code layer_<textur-uuid>}-Aeste enthalten (1309 Witch Hat hat drei -
+     * 48 von 64 Bones gehoeren zu fremden Varianten). Sichtbar ist nur der Ast,
+     * dessen UUID der getragenen Textur entspricht - belegt an 1309:
+     * default_data[0] = 921de76d-2de9-49b3-85fb-1c512e8ca740, Wurzel-Bone =
+     * layer_921de76d2de949b385fb1c512e8ca740 (gleiche UUID ohne Bindestriche,
+     * ggf. mit Suffix wie "_rgb" oder "_2021").
+     * <p>
+     * Geprueft wird die ganze Ahnenkette: Kinder eines fremden Astes muessen
+     * ebenfalls verschwinden. Wird nur aufgerufen, wenn es MEHRERE Varianten
+     * gibt - bei genau einem Ast (963, 855) gaebe es sonst nichts mehr zu sehen.
+     *
+     * @param textureUuid getragene Textur-UUID (mit Bindestrichen), darf null sein
+     */
+    private static boolean isHiddenLayer(String name, BedrockGeometry geo, String textureUuid) {
+        if (textureUuid == null) {
+            return false;
+        }
+        String worn = textureUuid.replace("-", "").toLowerCase();
+
+        String cur = name;
+        int guard = 0;
+        while (cur != null && guard++ < 100) {
+            String uuid = layerUuidOf(cur);
+            if (uuid != null && !uuid.equals(worn)) {
+                return true;
+            }
+            cur = parentOf(cur, geo);
+        }
+        return false;
     }
 
     private static int packColor(float[] rgb) {

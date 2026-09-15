@@ -192,7 +192,7 @@ public final class BedrockModelBuilder {
         }
     }
 
-    private static float[] findParentPivot(BedrockGeometry.Bone bone, BedrockGeometry geo) {
+        private static float[] findParentPivot(BedrockGeometry.Bone bone, BedrockGeometry geo) {
         if (bone.parent == null) {
             return new float[]{0, 0, 0};
         }

@@ -52,15 +52,36 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
      * z.B. List.of(1460, 328, 1) fuer Angel Wings V2 + Leaves Aura + Tail.
      * ACHTUNG vor Release wieder leeren - sonst tragen ALLE Spieler diese Cosmetics.
      */
-    private static final List<Integer> TEST_COSMETIC_IDS = List.of();
+    private static final List<Integer> TEST_COSMETIC_IDS = List.of(963, 1309, 1, 328);
 
     
     //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
     private static final boolean TEST_NO_ANIMATION = false;
 
-    /** Kategorien, die dieser Layer rendert. Alle BODY-gebunden, laufen durch dieselbe
-     *  TYPE_BOUND-Pipeline. UNDERGLOW fehlt bewusst (braucht erst den Layers-Effekt). */
-    private static final java.util.Set<String> SUPPORTED_CATEGORIES = java.util.Set.of("WING", "AURA", "BACK");
+    /** Kategorien, die dieser Layer rendert. WING/AURA/BACK haengen am Koerper,
+     *  HAT am Kopf (eigene Pose, siehe applyHeadPose). UNDERGLOW fehlt noch -
+     *  der Layers-Filter ist da, aber ungetestet fuer die Kategorie. */
+    private static final java.util.Set<String> SUPPORTED_CATEGORIES = java.util.Set.of("WING", "AURA", "BACK", "HAT");
+
+    /** GEMESSEN (Live-Justierung im Dev-Client): 0. Der Layer-Ursprung liegt bereits
+     *  am Kopf-Drehpunkt - es braucht keinen Versatz vor der Drehung. Entscheidend
+     *  ist nicht dieser Wert, sondern dass ERST gedreht und DANN aufgesetzt wird. */
+    private static final double NECK_PIVOT_Y = 0.0D;
+
+    /** GEMESSEN: 0. Mit korrektem HEAD_SCALE sitzt der Hut ohne zusaetzlichen
+     *  Versatz richtig - die frueheren -0.125 waren Kompensation fuer den zu
+     *  kleinen Wing-Scale. Negativ waere nach oben. */
+    private static final double HEAD_OFFSET_Y = 0.0D;
+
+    /** Wie weit der Kopf beim Sneaken absinkt. Y invertiert: POSITIV senkt nach unten.
+     *  KALIBRIERWERT - Startpunkt 0.21 wie in applyBodyPose. */
+    private static final double CROUCH_HEAD_DROP = 0.21D;
+
+    /** Grund-Faktor fuer kopfgebundene Cosmetics. GEMESSEN (Sicht-Vergleich gegen
+     *  LabyMod-Shop an 7, 16, 19, 113, 1309): 1.0, also der Katalog-Scale
+     *  unveraendert. Mit dem Wing-Faktor 0.8 waren Huete zu klein - der Kopf
+     *  schaute unter der Krempe hervor. */
+    private static final float HEAD_SCALE = 1.0F;
 
     /**
      * Ein Controller pro Spieler-UUID: der Animationszustand (clip, clipTime,
@@ -115,7 +136,8 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         }
 
         for (int cosmeticId : ids) {
-            renderOne(cosmeticId, poseStack, buffer, packedLight, player, limbSwingAmount, partialTicks);
+            renderOne(cosmeticId, poseStack, buffer, packedLight, player, limbSwingAmount, partialTicks,
+                    netHeadYaw, headPitch);
         }
     }
 
@@ -123,7 +145,8 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
      *  jetzt pro getragenem Cosmetic in der Schleife aufgerufen. */
     private void renderOne(int cosmeticId, PoseStack poseStack, MultiBufferSource buffer,
                            int packedLight, AbstractClientPlayer player,
-                           float limbSwingAmount, float partialTicks) {
+                           float limbSwingAmount, float partialTicks,
+                           float netHeadYaw, float headPitch) {
 
         // Ein Controller je (Spieler + Cosmetic): der Animationszustand liegt in
         // Instanzfeldern, Wing und Aura duerfen sich den nicht teilen.
@@ -184,15 +207,19 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         // --- Rendern ---
         poseStack.pushPose();
 
-        if (player.isCrouching()) {
-            poseStack.translate(0.0D, 0.21D, 0.0D);
-            poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
+        // Pose nach Befestigungspunkt: Huete folgen dem Kopf (Yaw/Pitch), alles
+        // andere haengt am Koerper. Der Rest der Methode ist fuer beide gleich.
+        boolean head = "HAT".equals(meta.category());
+        if (head) {
+            applyHeadPose(poseStack, player, netHeadYaw, headPitch);
+        } else {
+            applyBodyPose(poseStack, player);
         }
 
-        poseStack.translate(0.0D, 0.0625D, 0.01D);
-
         // Scale aus dem Katalog (pro Cosmetic verschieden) mit unserem Grund-Faktor.
-        float scale = meta.scale() * 0.8F;
+        // Koerper und Kopf haben eigene Faktoren: 0.8 ist an Wings kalibriert und
+        // laesst Huete zu klein wirken (Kopf schaut unter der Krempe hervor).
+        float scale = meta.scale() * (head ? HEAD_SCALE : 0.8F);
         poseStack.scale(scale, scale, scale);
 
         var consumer = buffer.getBuffer(RenderType.entityTranslucent(texture));
@@ -229,7 +256,7 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         CosmeticColorRenderer.renderColored(poseStack, consumer, stableLight,
                 built.root(), built.bonesByName(), built.geometry(),
                 color0, color1, color2, restColor,
-                buffer, texture);
+                buffer, texture, textureUuid);
 
         poseStack.popPose();
     }
@@ -237,5 +264,46 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
     /** Sicherer Zugriff auf ein Farb-Element im data-Array (oder null). */
     private String colorAt(List<String> data, int index) {
         return (data != null && index < data.size()) ? data.get(index) : null;
+    }
+
+    /** Pose fuer koerpergebundene Cosmetics (Wing, Aura, Back) - wie bisher. */
+    private static void applyBodyPose(PoseStack poseStack, AbstractClientPlayer player) {
+        if (player.isCrouching()) {
+            poseStack.translate(0.0D, 0.21D, 0.0D);
+            poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
+        }
+        poseStack.translate(0.0D, 0.0625D, 0.01D);
+    }
+
+    /**
+     * Pose fuer kopfgebundene Cosmetics (HAT). Der Hut muss der Kopfdrehung folgen,
+     * sonst schwebt er starr, waehrend sich der Kopf dreht. netHeadYaw/headPitch
+     * kommen vom Spieler-Renderer und sind bereits relativ zum Koerper.
+     * <p>
+     * Drehpunkt und Aufsatzhoehe sind getrennt: NECK_PIVOT_Y bestimmt, WO gedreht
+     * wird, HEAD_OFFSET_Y wie weit der Hut darueber sitzt. Beide Kalibrierwerte.
+     */
+    private static void applyHeadPose(PoseStack poseStack, AbstractClientPlayer player,
+                                      float netHeadYaw, float headPitch) {
+        // REIHENFOLGE ist entscheidend: erst an den Kopf-Drehpunkt (Halsansatz)
+        // fahren, DORT drehen, und erst danach den Hut relativ dazu aufsetzen.
+        // Andersherum dreht der Hut um den Layer-Ursprung und beschreibt beim
+        // Umschauen einen Bogen - der Abstand zum Kopf ist dann in jeder
+        // Blickrichtung anders.
+
+        // 1) Zum Kopf-Drehpunkt. Beim Ducken senkt sich der Kopf, also mitnehmen -
+        //    aber NICHT die 28.65-Grad-Neigung aus applyBodyPose: die gilt fuer den
+        //    Ruecken, der Kopf bleibt beim Sneaken waagerecht.
+        if (player.isCrouching()) {
+            poseStack.translate(0.0D, CROUCH_HEAD_DROP, 0.0D);
+        }
+        poseStack.translate(0.0D, NECK_PIVOT_Y, 0.0D);
+
+        // 2) Am Drehpunkt drehen, wie der Vanilla-Kopf: erst Yaw, dann Pitch.
+        poseStack.mulPose(Axis.YP.rotationDegrees(netHeadYaw));
+        poseStack.mulPose(Axis.XP.rotationDegrees(headPitch));
+
+        // 3) Hut relativ zum Drehpunkt aufsetzen (dreht jetzt sauber mit).
+        poseStack.translate(0.0D, HEAD_OFFSET_Y, 0.0D);
     }
 }

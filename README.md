@@ -15,7 +15,7 @@ interfaces.
 ## Features
 
 - **Capes / Cloaks** – with animation
-- **Wings / Aura / Tails** – fully dynamic: geometry, texture, animation and coloring are
+- **Wings / Aura / Tails / Hats** – fully dynamic: geometry, texture, animation and coloring are
   loaded at runtime, including animation, coloring
 - **Multiplayer** – cosmetics are shown for other players too, not just
   yourself
@@ -47,7 +47,7 @@ body part.
 
 ## Status
 
-In development. Capes and wings are working, for the local player and for other
+In development. The Cosmetics mentioned obove (Features) are working, for the local player and for other
 players. Multiplayer has so far only been tested with two players, not with
 larger numbers. Additional cosmetic types are a possible next step.
 
