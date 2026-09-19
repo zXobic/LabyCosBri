@@ -52,16 +52,17 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
      * z.B. List.of(1460, 328, 1) fuer Angel Wings V2 + Leaves Aura + Tail.
      * ACHTUNG vor Release wieder leeren - sonst tragen ALLE Spieler diese Cosmetics.
      */
-    private static final List<Integer> TEST_COSMETIC_IDS = List.of();
+    private static final List<Integer> TEST_COSMETIC_IDS = List.of(1460, 328, 1309, 928);
 
     
     //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
     private static final boolean TEST_NO_ANIMATION = false;
 
-    /** Kategorien, die dieser Layer rendert. WING/AURA/BACK haengen am Koerper,
-     *  HAT am Kopf (eigene Pose, siehe applyHeadPose). UNDERGLOW fehlt noch -
-     *  der Layers-Filter ist da, aber ungetestet fuer die Kategorie. */
-    private static final java.util.Set<String> SUPPORTED_CATEGORIES = java.util.Set.of("WING", "AURA", "BACK", "HAT");
+    /** Kategorien, die dieser Layer rendert. Alle ausser HAT haengen am Koerper;
+     *  HAT hat eine eigene Pose (applyHeadPose). UNDERGLOW belegt an 728 (FEET)
+     *  und 1307 (BACK). */
+    private static final java.util.Set<String> SUPPORTED_CATEGORIES =
+            java.util.Set.of("WING", "AURA", "BACK", "HAT", "UNDERGLOW");
 
     /** GEMESSEN (Live-Justierung im Dev-Client): 0. Der Layer-Ursprung liegt bereits
      *  am Kopf-Drehpunkt - es braucht keinen Versatz vor der Drehung. Entscheidend
@@ -76,12 +77,6 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
     /** Wie weit der Kopf beim Sneaken absinkt. Y invertiert: POSITIV senkt nach unten.
      *  KALIBRIERWERT - Startpunkt 0.21 wie in applyBodyPose. */
     private static final double CROUCH_HEAD_DROP = 0.21D;
-
-    /** Grund-Faktor fuer kopfgebundene Cosmetics. GEMESSEN (Sicht-Vergleich gegen
-     *  LabyMod-Shop an 7, 16, 19, 113, 1309): 1.0, also der Katalog-Scale
-     *  unveraendert. Mit dem Wing-Faktor 0.8 waren Huete zu klein - der Kopf
-     *  schaute unter der Krempe hervor. */
-    private static final float HEAD_SCALE = 1.0F;
 
     /**
      * Ein Controller pro Spieler-UUID: der Animationszustand (clip, clipTime,
@@ -215,11 +210,11 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         } else {
             applyBodyPose(poseStack, player);
         }
-
-        // Scale aus dem Katalog (pro Cosmetic verschieden) mit unserem Grund-Faktor.
-        // Koerper und Kopf haben eigene Faktoren: 0.8 ist an Wings kalibriert und
-        // laesst Huete zu klein wirken (Kopf schaut unter der Krempe hervor).
-        float scale = meta.scale() * (head ? HEAD_SCALE : 0.8F);
+        // Scale direkt aus dem Katalog, OHNE Grundfaktor. Der frueher feste
+        // 0.8er-Faktor war keine Regel, sondern 1460s Animations-Scale - den
+        // liest der Parser jetzt selbst aus der animation.json. Mit 0.8 waren
+        // Huete zu klein und Auras zu eng am Koerper.
+        float scale = meta.scale();
         poseStack.scale(scale, scale, scale);
 
         var consumer = buffer.getBuffer(RenderType.entityTranslucent(texture));
@@ -228,15 +223,19 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         String hex0 = colorAt(data, 1);
         String hex1 = colorAt(data, 2);
         String hex2 = colorAt(data, 3);
+        String hex3 = colorAt(data, 4);
 
         float[] color0 = CosmeticColorRenderer.hexToRgb(hex0);
         float[] color1 = CosmeticColorRenderer.hexToRgb(hex1);
         float[] color2 = hex2 != null ? CosmeticColorRenderer.hexToRgb(hex2) : null;
+        float[] color3 = hex3 != null ? CosmeticColorRenderer.hexToRgb(hex3) : null;
 
         // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...): die letzte
         // tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
         float[] restColor;
-        if (hex2 != null) {
+        if (hex3 != null) {
+            restColor = color3;
+        } else if (hex2 != null) {
             restColor = color2;
         } else if (hex1 != null) {
             restColor = color1;
@@ -255,7 +254,7 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
 
         CosmeticColorRenderer.renderColored(poseStack, consumer, stableLight,
                 built.root(), built.bonesByName(), built.geometry(),
-                color0, color1, color2, restColor,
+                color0, color1, color2, color3, restColor,
                 buffer, texture, textureUuid);
 
         poseStack.popPose();
@@ -266,13 +265,22 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         return (data != null && index < data.size()) ? data.get(index) : null;
     }
 
-    /** Pose fuer koerpergebundene Cosmetics (Wing, Aura, Back) - wie bisher. */
+
+    /**
+     * Pose fuer koerpergebundene Cosmetics (Wing, Aura, Back, Underglow).
+     * <p>
+     * Die Sneak-Neigung gilt auch fuer bodengebundene Cosmetics: Creator
+     * rechnen damit. Belegt an 928 Ocean und 728 Flower Underglow - deren
+     * Sneak-Clips setzen auf den layer_-Wurzeln konstant rotation [-27.5,0,0]
+     * und position [0,4,5.1], also genau eine Gegenbewegung zur Koerperneigung.
+     * Ein frueherer Versuch, FEET von der Neigung auszunehmen, kippte den Ring
+     * deshalb erst recht weg.
+     */
     private static void applyBodyPose(PoseStack poseStack, AbstractClientPlayer player) {
         if (player.isCrouching()) {
             poseStack.translate(0.0D, 0.21D, 0.0D);
             poseStack.mulPose(Axis.XP.rotationDegrees(28.65F));
         }
-        poseStack.translate(0.0D, 0.0625D, 0.01D);
     }
 
     /**

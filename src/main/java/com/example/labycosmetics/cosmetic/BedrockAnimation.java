@@ -26,7 +26,7 @@ import java.util.Map;
 /**
  * Datencontainer fuer eine geparste Bedrock-Animation (animation.json).
  * Enthaelt mehrere benannte Animationen (z.B. "Idle", "Moving"), jede mit
- * pro-Bone-Keyframes fuer Rotation (und optional Scale).
+ * pro-Bone-Keyframes fuer Rotation, Position und Scale.
  */
 public final class BedrockAnimation {
 
@@ -135,7 +135,12 @@ public final class BedrockAnimation {
          * kein Fehler und kein Grund fuer eine Ueberblendung.
          * <p>
          * Weder -q noch -f: der Trigger wird verworfen, wenn schon etwas
-         * laeuft ("the animation will not be played").
+         * laeuft ("the animation will not be played") - ABER nur innerhalb
+         * desselben Zustands. Bei einem ZUSTANDSWECHSEL schaltet der
+         * Controller sofort um. Belegt an 928 Ocean und 728 Flower Underglow,
+         * die beide gar keine Flags benutzen: ohne die Ausnahme blieb der
+         * Ring nach dem Entsneaken 8,25s in der Sneak-Pose haengen.
+         * Siehe CosmeticAnimationController.update, "flagless".
          */
         public boolean force = false;
 
@@ -200,6 +205,17 @@ public final class BedrockAnimation {
          * BedrockModelBuilder es auch tut.
          */
         public final Map<String, List<Keyframe>> positions = new HashMap<>();
+
+        /**
+         * Bone-Name -> Liste von Scale-Keyframes (Faktor, 1 = unveraendert).
+         * <p>
+         * Traegt zweierlei, beides wird angewandt: EFFEKTE (950 Phoenix laesst
+         * 36 spark_-Bones zwischen 0 und 0,5 pulsieren, 493 Ice Wings 32
+         * Kristalle zwischen 0 und 1 erscheinen, 1893 Zodiac faehrt den Kreis
+         * beim Sneaken auf 0 und mit "reappear" wieder hoch) und die
+         * GRUNDGROESSE (1460: konstant 0,8 auf dem Wurzel-Bone).
+         */
+        public final Map<String, List<Keyframe>> scales = new HashMap<>();
     }
 
     /**

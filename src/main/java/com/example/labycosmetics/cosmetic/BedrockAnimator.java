@@ -112,6 +112,21 @@ public final class BedrockAnimator {
             part.y = base[1] - pos[1];
             part.z = base[2] + pos[2];
         }
+
+        for (Map.Entry<String, List<BedrockAnimation.Keyframe>> entry : clip.scales.entrySet()) {
+            ModelPart part = bonesByName.get(entry.getKey());
+            if (part == null) {
+                continue;
+            }
+            float[] sc = sample(entry.getValue(), t);
+            // Scale ist ein FAKTOR (1 = unveraendert), keine Addition. Die
+            // Grund-Skalierung eines frisch gebauten ModelPart ist 1, deshalb
+            // direkt setzen. Konstante Grundskalierungen filtert schon der
+            // Parser aus (siehe putScaleChannel).
+            part.xScale = sc[0];
+            part.yScale = sc[1];
+            part.zScale = sc[2];
+        }
     }
 
     /**
@@ -143,6 +158,14 @@ public final class BedrockAnimator {
             part.x = pos[0];
             part.y = pos[1];
             part.z = pos[2];
+
+            // Scale IMMER auf 1 zurueck: die Grund-Skalierung eines gebauten
+            // ModelPart ist 1.
+            // Ohne das bliebe ein auf 0 gefahrener Bone fuer immer unsichtbar,
+            // wenn der naechste Clip ihn nicht kennt.
+            part.xScale = 1f;
+            part.yScale = 1f;
+            part.zScale = 1f;
         }
     }
 

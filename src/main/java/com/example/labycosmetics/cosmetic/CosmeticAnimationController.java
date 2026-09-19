@@ -182,7 +182,24 @@ public final class CosmeticAnimationController {
             Pick p = pick(anim, next, w);
             boolean wasRunning = running();
 
-            if (p.clip() == null || !wasRunning || p.clip().force) {
+            // Wechselt der ZUSTAND, wird sofort umgeschaltet - auch ohne -q/-f.
+            // Die Doku-Regel "weder -q noch -f -> wird nicht gespielt" trifft
+            // konkurrierende Trigger IM SELBEN Zustand; ein Zustandswechsel ist
+            // etwas anderes. Belegt an zwei Underglows, die gar keine Flags
+            // benutzen: 928 Ocean und 728 Flower haben je einen Normal-Clip
+            // (-t IDLE,MOVING,STOP_SNEAKING) und einen Sneak-Clip
+            // (-t SNEAK_*,START_SNEAKING), beide flaglos. Ohne diese Ausnahme
+            // blieb der Ring nach dem Entsneaken in der Sneak-Pose haengen, bis
+            // der 8,25s lange Clip durchgelaufen war.
+            // Nur fuer Clips OHNE jedes Flag: -q soll weiter bis zur Zyklusgrenze
+            // warten duerfen (die nahtlosen Uebergaenge an 35/54/404/963/1460
+            // haengen daran), -f bricht ohnehin ab. Uebrig bleibt der flaglose
+            // Fall, den die Doku als "wird nicht gespielt" beschreibt - fuer
+            // konkurrierende Trigger richtig, fuer einen Zustandswechsel nicht.
+            boolean flagless = p.clip() != null && !p.clip().queued && !p.clip().force;
+            boolean stateChange = flagless && p.state() != state;
+
+            if (p.clip() == null || !wasRunning || p.clip().force || stateChange) {
                 // -f schlaegt -q. ENTSCHEIDUNG, keine Doku-Aussage: beides zugleich
                 // gibt es nur 2x (Droid 1524 [PETS]) - kein Wing, kein Pruefstein.
                 if (DEBUG) {
@@ -190,7 +207,7 @@ public final class CosmeticAnimationController {
                             p.clip() == null ? "kein Clip"
                                     : !wasRunning
                                         ? (clip == null ? "nichts laeuft" : "Uebergang ist fertig")
-                                        : "-f true");
+                                        : p.clip().force ? "-f true" : "Zustandswechsel");
                 }
                 enterClip(p.state(), p.clip(), anim);
                 entered = true;

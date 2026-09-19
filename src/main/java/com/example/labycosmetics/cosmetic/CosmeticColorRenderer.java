@@ -32,7 +32,9 @@ import java.util.Map;
  * <p>
  * LabyMod-Cosmetics ordnen Farben ueber Bone-Namens-Praefixe zu:
  * {@code color_0_*} -> Farbe 1, {@code color_1_*} -> Farbe 2,
- * {@code color_2_*} -> Farbe 3, alles andere -> Rest-Farbe (z.B. glow).
+ * {@code color_2_*} -> Farbe 3, {@code color_3_*} -> Farbe 4, alles andere ->
+ * Rest-Farbe (z.B. glow). Vier Farben sind belegt: 1304 Reef, 1410 Train und
+ * 1893 Zodiac haben "options": texture,rgb,rgb,rgb,rgb (also 4 RGB-Werte).
  *
  * <h3>Farb-VERERBUNG ueber die Hierarchie</h3>
  * Ein color-Bone hat oft keine eigenen Cubes, sondern seine KINDER tragen
@@ -51,6 +53,11 @@ public final class CosmeticColorRenderer {
     /** TEST: Glow-Pass aus -> alles normal beleuchtet. Fuer den A/B-Vergleich
      *  am selben Wing (1460 oder 855) im Dunkeln. */
     private static final boolean TEST_NO_GLOW = false;
+
+    /** TEMP-DIAGNOSE: merkt sich, fuer welche Texturen schon geloggt wurde,
+     *  damit die Layers-Zeile nicht pro Frame feuert. Wieder entfernen. */
+    private static final java.util.Set<String> DIAG_LOGGED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * Glueht dieser Bone? Wahr, wenn er selbst oder ein VORFAHRE mit "glow"
@@ -122,7 +129,7 @@ public final class CosmeticColorRenderer {
         }
     }
 
-    private enum ColorClass { C0, C1, C2, REST }
+    private enum ColorClass { C0, C1, C2, C3, REST }
 
     private static ColorClass classifyWithInheritance(String boneName, BedrockGeometry geo) {
         String current = boneName;
@@ -131,6 +138,7 @@ public final class CosmeticColorRenderer {
             if (current.startsWith("color_0")) return ColorClass.C0;
             if (current.startsWith("color_1")) return ColorClass.C1;
             if (current.startsWith("color_2")) return ColorClass.C2;
+            if (current.startsWith("color_3")) return ColorClass.C3;
             current = parentOf(current, geo);
         }
         return ColorClass.REST;
@@ -153,7 +161,7 @@ public final class CosmeticColorRenderer {
                                      int packedLight, ModelPart root,
                                      Map<String, ModelPart> bones, BedrockGeometry geo,
                                      float[] color0, float[] color1,
-                                     float[] color2, float[] restColor,
+                                     float[] color2, float[] color3, float[] restColor,
                                      net.minecraft.client.renderer.MultiBufferSource buffer,
                                      net.minecraft.resources.ResourceLocation texture,
                                      String textureUuid) {
@@ -189,9 +197,9 @@ public final class CosmeticColorRenderer {
                 glowCount++;
             }
         }
-        if (hidden > 0) {
-            LOGGER.debug("[LabyCos] Layers: {} von {} Bones ausgeblendet ({} Varianten)",
-                    hidden, bones.size(), variants.size());
+        if (hidden > 0 && DIAG_LOGGED.add(textureUuid)) {
+            LOGGER.info("[LabyCos] Layers: {} von {} Bones ausgeblendet ({} Varianten), getragen = {}",
+                    hidden, bones.size(), variants.size(), textureUuid);
         }
         // Pruefstein: >0 fuer Glow-Wings (855, 1460), 0 fuer die Gegenprobe
         // (24, 404). "kein Glow" und "Glow-Erkennung kaputt" saehen sonst
@@ -221,6 +229,9 @@ public final class CosmeticColorRenderer {
         if (color2 != null) {
             renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C2, color2);
         }
+        if (color3 != null) {
+            renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C3, color3);
+        }
         renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.REST, restColor);
 
         // Durchgang B - GLOW: die gluehenden Bones nochmal emissiv obendrauf.
@@ -236,6 +247,9 @@ public final class CosmeticColorRenderer {
             glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C1, color1);
             if (color2 != null) {
                 glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C2, color2);
+            }
+            if (color3 != null) {
+                glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C3, color3);
             }
             glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.REST, restColor);
         }

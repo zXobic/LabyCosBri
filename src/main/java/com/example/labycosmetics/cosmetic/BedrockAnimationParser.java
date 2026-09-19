@@ -33,9 +33,10 @@ import java.util.Map;
  * Parst eine LabyMod animation.json (Bedrock-Format 1.8.0) in unsere
  * {@link BedrockAnimation}-Struktur.
  * <p>
- * Wir extrahieren pro Animation und pro Bone die Rotations-Keyframes.
- * Scale-Keyframes (nur "glow_main" mit konstantem 0.8) ignorieren wir hier -
- * die 0.8-Grundskalierung wenden wir bereits fest im Layer an.
+ * Wir extrahieren pro Animation und pro Bone die Keyframes fuer Rotation,
+ * Position und Scale. Der Scale-Kanal traegt sowohl Effekte (950 Sparks,
+ * 493 Kristalle, 1893 "invisible") als auch die Grundgroesse (1460: konstant
+ * 0,8) - beides wird angewandt, der Layer skaliert nicht zusaetzlich.
  */
 public final class BedrockAnimationParser {
 
@@ -76,9 +77,7 @@ public final class BedrockAnimationParser {
                     JsonObject boneObj = bones.getAsJsonObject(boneName);
                     putChannel(boneObj, "rotation", clip.rotations, boneName, clipName);
                     putChannel(boneObj, "position", clip.positions, boneName, clipName);
-                    // "scale" bleibt bewusst aussen vor: kommt nur bei
-                    // 1460/glow_main vor und ist dort konstant 0.8 - das
-                    // wendet der Layer bereits fest an.
+                    putScaleChannel(boneObj, clip.scales, boneName, clipName);
                 }
             }
 
@@ -221,6 +220,31 @@ public final class BedrockAnimationParser {
     }
 
     /**
+     * Liest den "scale"-Kanal eines Bones.
+     * <p>
+     * Traegt zweierlei, beides gewollt: EFFEKTE (950 Phoenix laesst 36 spark_-
+     * Bones pulsieren, 493 Ice Wings 32 Kristalle erscheinen, 1893 Zodiac faehrt
+     * den Kreis beim Sneaken auf 0) und die GRUNDGROESSE (1460: konstant 0,8).
+     * Ein frueherer Filter warf konstante Kanaele weg, weil der Layer damals
+     * pauschal mit 0,8 skalierte - beides zusammen haette die Fluegel auf 0,64
+     * geschrumpft. Der Layer-Faktor ist weg, also gehoert auch der Filter weg.
+     */
+    private static void putScaleChannel(JsonObject boneObj,
+                                        Map<String, List<BedrockAnimation.Keyframe>> target,
+                                        String boneName, String clipName) {
+        Map<String, List<BedrockAnimation.Keyframe>> tmp = new java.util.HashMap<>();
+        putChannel(boneObj, "scale", tmp, boneName, clipName);
+        List<BedrockAnimation.Keyframe> keys = tmp.get(boneName);
+        if (keys == null || keys.isEmpty()) {
+            return;
+        }
+        // Filter entfernt: der Layer wendet keinen Grundfaktor mehr an, also ist
+        // auch ein konstanter Scale (1460: 0,8) die echte Grundgroesse.
+        target.put(boneName, keys);
+    }
+
+
+    /**
      * Liest einen Keyframe-Kanal eines Bones ("rotation" oder "position").
      * Fehlt der Kanal, passiert nichts.
      */
@@ -231,10 +255,21 @@ public final class BedrockAnimationParser {
             return;
         }
         JsonElement el = boneObj.get(channel);
+        if (el.isJsonArray()) {
+            // Konstanter Wert als Array statt Keyframe-Liste: in Bedrock legal
+            // ("dreh den Bone um X und lass ihn dort"). Belegt an 1307 Rune
+            // Circle, Clip DISAPPEAR: "rotation": [0, 25.5, 0] fuer letters,
+            // outer_square und inner_square in allen vier Layer-Varianten.
+            // Als EINEN Keyframe bei t=0 ablegen - der Animator haelt den Wert
+            // dann ueber die ganze Clipdauer.
+            List<BedrockAnimation.Keyframe> constant = new ArrayList<>();
+            constant.add(new BedrockAnimation.Keyframe(0f, toFloat3(el.getAsJsonArray()), false));
+            target.put(boneName, constant);
+            return;
+        }
         if (!el.isJsonObject()) {
-            // Konstanter Wert als Array statt Keyframe-Liste. Kommt in den
-            // fuenf bekannten Dateien nicht vor - deshalb melden statt raten.
-            LOGGER.warn("[LabyCos] Clip '{}', Bone '{}': {} ist kein Keyframe-Objekt ({})",
+            // Weder Objekt noch Array - unbekannte Form, melden statt raten.
+            LOGGER.warn("[LabyCos] Clip '{}', Bone '{}': {} ist weder Keyframe-Objekt noch Array ({})",
                     clipName, boneName, channel, el);
             return;
         }
