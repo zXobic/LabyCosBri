@@ -16,8 +16,10 @@ NeoForge 1.21.1. Diese Mod stellt bestimmte Cosmetics im Spiel dar, indem sie
 ## Features
 
 - **Capes / Cloaks** – mit Animation
-- **Flügel (Wings) / Aura / Tails / Hats** – vollständig dynamisch: Geometrie, Textur, Animation und
-  Färbung werden zur Laufzeit geladen, inkl. FAnimation, Färbung
+- **Flügel (Wings) / Auren / Backs / Hüte / Underglows** – vollständig
+  dynamisch: Geometrie, Textur, Animation und Färbung werden zur Laufzeit
+  geladen
+- **Animierte Texturen** – Cosmetics mit mehreren Frames werden abgespielt
 - **Mehrspieler** – Cosmetics werden auch für andere Spieler dargestellt,
   nicht nur für einen selbst (bisher mit zwei Spielern getestet)
 
@@ -49,7 +51,8 @@ zeichnen.
 
 ## Status
 
-In Entwicklung. Die Oben genannten Cosmetics (Features) funktionieren, für den lokalen Spieler und für
+In Entwicklung. Rund 190 der etwa 610 Cosmetics im Katalog werden dargestellt.
+Die oben genannten Kategorien funktionieren, für den lokalen Spieler und für
 andere Spieler. Der Mehrspieler-Betrieb wurde bisher nur mit zwei Spielern
 getestet, nicht mit größeren Zahlen. Weitere Cosmetic-Typen sind ein möglicher
 nächster Schritt.
