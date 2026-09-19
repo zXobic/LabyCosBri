@@ -52,7 +52,7 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
      * z.B. List.of(1460, 328, 1) fuer Angel Wings V2 + Leaves Aura + Tail.
      * ACHTUNG vor Release wieder leeren - sonst tragen ALLE Spieler diese Cosmetics.
      */
-    private static final List<Integer> TEST_COSMETIC_IDS = List.of(1460, 328, 1309, 928);
+    private static final List<Integer> TEST_COSMETIC_IDS = List.of();
 
     
     //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
