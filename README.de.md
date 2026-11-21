@@ -13,7 +13,7 @@ Es handelt sich um eine clientseitige Mod für Minecraft, kompatibel mit
 **Fabric 26.3**. Diese Mod stellt bestimmte Cosmetics im Spiel dar, indem sie
 öffentlich erreichbare Schnittstellen abfragt.
 
-> Die NeoForge-1.21.1-Version liegt im Branch [`main`](../../tree/main).
+> Die NeoForge-1.21.1-Version liegt im Branch [`neoforge-1.21.1`](../../tree/neoforge-1.21.1).
 
 ## Voraussetzungen
 

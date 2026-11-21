@@ -12,7 +12,7 @@ A client-side mod for Minecraft, compatible with **Fabric 26.3**.
 This mod displays certain cosmetics in-game by querying publicly accessible
 interfaces.
 
-> The NeoForge 1.21.1 version lives on the [`main`](../../tree/main) branch.
+> The NeoForge 1.21.1 version lives on the [`neoforge-1.21.1`](../../tree/neoforge-1.21.1) branch.
 
 ## Requirements
 
