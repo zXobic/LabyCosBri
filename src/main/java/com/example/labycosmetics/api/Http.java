@@ -35,7 +35,7 @@ import java.util.concurrent.CompletableFuture;
 public final class Http {
 
     // Bei Versionswechsel mitziehen (oder aus FabricLoader lesen).
-    private static final String USER_AGENT = "labycosbri/0.2.5 (Fabric; +github.com/zXobic)";
+    private static final String USER_AGENT = "labycosbri/0.3.0 (Fabric 26.3; +github.com/zXobic/LabyCosBri)";
 
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
