@@ -1,0 +1,61 @@
+plugins {
+    // Seit 26.1 heisst das Plugin "net.fabricmc.fabric-loom" (nicht mehr "fabric-loom").
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    // Loom bringt die Repos fuer Minecraft und Fabric selbst mit.
+}
+
+loom {
+    runs {
+        client {
+            // Testmodus ohne getragene Cosmetics (Dev-Account = Offline-UUID):
+            // feste Cosmetic-IDs, kommagetrennt. Leer lassen = Normalbetrieb.
+            // Wirkt NUR hier in der Run-Config, nie im ausgelieferten Jar.
+            vmArg '-Dlabycosbri.testIds=9,1460'
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // Kein "mappings"-Eintrag mehr: 26.1 ist unverschleiert.
+    // "implementation" statt "modImplementation" (Loom remappt nicht mehr).
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+    inputs.property 'version', project.version
+
+    filesMatching('fabric.mod.json') {
+        expand 'version': inputs.properties.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 25
+    it.options.encoding = 'UTF-8'
+}
+
+java {
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+    inputs.property 'archivesName', project.base.archivesName
+    from('LICENSE') {
+        rename { "${it}_${inputs.properties.archivesName}" }
+    }
+}
