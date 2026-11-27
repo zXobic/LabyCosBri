@@ -261,6 +261,10 @@ public class CosmeticRenderLayer extends RenderLayer<AvatarRenderState, PlayerMo
     private static PoseStack stackOf(PoseStack.Pose pose) {
         PoseStack stack = new PoseStack();
         stack.last().pose().set(pose.pose());
+        // Normalen-Matrix mitkopieren: FlatNormalConsumer vergleicht die Normale mit
+        // der Vertex-Position, um Rueckseiten zu erkennen. Beide muessen dafuer im
+        // selben (kamerarelativen) Raum liegen.
+        stack.last().normal().set(pose.normal());
         return stack;
     }
 

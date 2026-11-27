@@ -21,7 +21,7 @@ loom {
             // Testmodus ohne getragene Cosmetics (Dev-Account = Offline-UUID):
             // feste Cosmetic-IDs, kommagetrennt. Leer lassen = Normalbetrieb.
             // Wirkt NUR hier in der Run-Config, nie im ausgelieferten Jar.
-            vmArg '-Dlabycosbri.testIds=21'
+            vmArg '-Dlabycosbri.testIds=19,1460,728'
         }
     }
 }

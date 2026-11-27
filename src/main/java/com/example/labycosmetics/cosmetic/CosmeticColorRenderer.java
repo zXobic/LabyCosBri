@@ -156,28 +156,33 @@ public final class CosmeticColorRenderer {
         BedrockGeometry geo = built.geometry();
         Map<String, String> parents = parentIndex(geo);
 
-        // Layers-Effekt: Nur filtern, wenn es tatsaechlich MEHRERE Textur-Varianten
-        // gibt. Bei genau einem layer_-Ast (963, 855) gibt es nichts zu waehlen -
-        // der muss immer sichtbar bleiben, auch wenn die getragene UUID abweicht
-        // (im Dev-Client kommt sie aus defaultData und passt nie).
+        // Layers-Effekt laut Doku: layer_<uuid> ist nur bei dieser Textur sichtbar,
+        // layer_<uuid>_negate nur bei jeder ANDEREN Textur. Verschachtelt ergibt das
+        // Wenn-Sonst-Ketten (1809: rgb / rainbow / sonst normales Feuer).
+        // Gefiltert wird, sobald es irgendeine Layer-Bedingung gibt. Der fruehere
+        // Notbehelf "erst ab zwei Varianten" liess bei 963 beide Aeste uebereinander
+        // zeichnen. variants = Texturen der POSITIVEN Aeste, nur fuers Sicherheitsnetz.
         Set<String> variants = new HashSet<>();
+        boolean hasLayers = false;
         for (BedrockGeometry.Bone b : geo.bones) {
-            String u = layerUuidOf(b.name);
-            if (u != null) {
-                variants.add(u);
+            LayerCondition lc = layerConditionOf(b.name);
+            if (lc != null) {
+                hasLayers = true;
+                if (!lc.negate()) {
+                    variants.add(lc.textureUuid());
+                }
             }
         }
-        boolean filterLayers = variants.size() > 1;
 
-        Classification c = fill(bones, parents, filterLayers ? textureUuid : null);
+        Classification c = fill(bones, parents, hasLayers ? textureUuid : null);
 
-        // Sicherheitsnetz: Passt die getragene UUID zu KEINER Variante, waere das
-        // ganze Cosmetic weg. Belegt an 1809 Fire Underglow (2 Varianten, getragene
-        // Textur 3f6d8d8f-... gehoert zu keiner: "79 von 79 ausgeblendet"). Dann auf
-        // die erste Variante zurueckfallen - eine zu zeigen ist besser als keine,
-        // und besser als alle uebereinander (1309: zerrissene Optik).
+        // Sicherheitsnetz: Passt die getragene UUID zu KEINER Variante und gibt es
+        // keinen _negate-Ast, waere das ganze Cosmetic weg. Belegt an 750 Elves Ears
+        // und 1676 New Years Hat: deren Standardtextur gehoert zu keinem Ast (Dev-
+        // Client). Dann auf die erste Variante zurueckfallen - eine zu zeigen ist
+        // besser als keine.
         int hidden = countHidden(c, bones);
-        if (filterLayers && !bones.isEmpty() && hidden == bones.size()) {
+        if (hasLayers && !variants.isEmpty() && !bones.isEmpty() && hidden == bones.size()) {
             String fallback = new TreeSet<>(variants).first();
             LOGGER.debug("[LabyCos] Layers: getragene Textur {} passt zu keiner der {} "
                     + "Varianten - falle auf {} zurueck", textureUuid, variants.size(), fallback);
@@ -315,20 +320,30 @@ public final class CosmeticColorRenderer {
     }
 
     /**
-     * Die Textur-UUID aus einem {@code layer_<uuid>}-Bone-Namen, oder null wenn
-     * der Bone kein UUID-Layer ist. Suffixe wie "_rgb" oder "_2021" werden
-     * abgeschnitten; layer_slim / layer_right / layer_left liefern null.
+     * Bedingung eines Layer-Bones: sichtbar bei Textur {@code textureUuid}, mit
+     * {@code negate} umgekehrt (sichtbar bei jeder ANDEREN Textur).
      */
-    private static String layerUuidOf(String boneName) {
+    private record LayerCondition(String textureUuid, boolean negate) {}
+
+    /**
+     * Liest die Bedingung aus einem Bone-Namen. Format laut Layers-Doku:
+     * {@code layer_<uuid>[_negate][_name]}. Die Doku will die UUID ohne
+     * Bindestriche, viele Ersteller schreiben sie trotzdem mit (1885 Party Hat:
+     * layer_59891e13-5c36-..._small2) - daher werden sie entfernt.
+     * layer_slim / layer_right (Alex/Steve, Seite) liefern null: noch nicht
+     * umgesetzt, solche Aeste bleiben wie bisher immer sichtbar.
+     */
+    private static LayerCondition layerConditionOf(String boneName) {
         if (!boneName.startsWith("layer_")) {
             return null;
         }
-        String rest = boneName.substring("layer_".length()).toLowerCase(java.util.Locale.ROOT);
-        if (rest.length() < 32) {
+        String[] parts = boneName.substring("layer_".length()).split("_");
+        String uuid = parts[0].replace("-", "").toLowerCase(java.util.Locale.ROOT);
+        if (!uuid.matches("[0-9a-f]{32}")) {
             return null;
         }
-        String uuid = rest.substring(0, 32);
-        return uuid.matches("[0-9a-f]{32}") ? uuid : null;
+        boolean negate = parts.length > 1 && parts[1].equalsIgnoreCase("negate");
+        return new LayerCondition(uuid, negate);
     }
 
     /**
@@ -343,8 +358,10 @@ public final class CosmeticColorRenderer {
         String cur = name;
         int guard = 0;
         while (cur != null && guard++ < 100) {
-            String uuid = layerUuidOf(cur);
-            if (uuid != null && !uuid.equals(worn)) {
+            // Versteckt, wenn die Bedingung NICHT erfuellt ist: ohne negate muss die
+            // Textur passen, mit negate darf sie nicht passen.
+            LayerCondition lc = layerConditionOf(cur);
+            if (lc != null && lc.textureUuid().equals(worn) == lc.negate()) {
                 return true;
             }
             cur = parentOf(cur, parents);
@@ -588,9 +605,22 @@ public final class CosmeticColorRenderer {
      * 26.3: Methodensatz wie NeoForges VertexConsumerWrapper (26.3.x). Falls der Compiler hier eine fehlende abstrakte Methode meldet, hat
      * Mojang VertexConsumer erweitert - einfach durchreichen wie die anderen.
      */
-    private record FlatNormalConsumer(VertexConsumer delegate) implements VertexConsumer {
+    private static final class FlatNormalConsumer implements VertexConsumer {
+        private final VertexConsumer delegate;
+        // Position des aktuellen Vertex - fuer den Vorder-/Rueckseiten-Test in setNormal.
+        private float lastX;
+        private float lastY;
+        private float lastZ;
+
+        FlatNormalConsumer(VertexConsumer delegate) {
+            this.delegate = delegate;
+        }
+
         @Override
         public VertexConsumer addVertex(float x, float y, float z) {
+            lastX = x;
+            lastY = y;
+            lastZ = z;
             delegate.addVertex(x, y, z);
             return this;
         }
@@ -634,7 +664,14 @@ public final class CosmeticColorRenderer {
 
         @Override
         public VertexConsumer setNormal(float normalX, float normalY, float normalZ) {
-            delegate.setNormal(0.0F, 1.0F, 0.0F);
+            // 26.3 rechnet mit PER_FACE_LIGHTING: Rueckseiten (gl_FrontFacing = false)
+            // bekommen das Licht der UMGEKEHRTEN Normale. Mit fest (0,1,0) blieb fuer
+            // sie nur das Grundlicht (40 %) - flache Federn waren von einer Seite grau
+            // (1460 von vorne). Daher: Zeigt die Flaeche von der Kamera (Ursprung) weg,
+            // (0,-1,0) setzen - der Shader dreht es zurueck auf (0,1,0). Beide Seiten
+            // sind damit gleich hell, wie in 1.21.1 und in LabyMod.
+            boolean facesAway = lastX * normalX + lastY * normalY + lastZ * normalZ > 0f;
+            delegate.setNormal(0.0F, facesAway ? -1.0F : 1.0F, 0.0F);
             return this;
         }
 
