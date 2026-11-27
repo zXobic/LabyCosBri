@@ -103,8 +103,10 @@ public class CosmeticRenderLayer extends RenderLayer<AvatarRenderState, PlayerMo
     private static final double HEAD_OFFSET_Y = 0.0D;
 
     /** Wie weit der Kopf beim Sneaken absinkt. Y invertiert: POSITIV senkt nach unten.
-     *  KALIBRIERWERT - Startpunkt 0.21 wie in applyBodyPose. */
-    private static final double CROUCH_HEAD_DROP = 0.21D;
+     *  Vanilla HumanoidModel setzt beim Sneaken head.y = 4.2 Pixel (Koerper nur 3.2),
+     *  also 4.2 / 16 = 0.2625 Bloecke. Der fruehere Wert 0.21 war vom Koerper
+     *  uebernommen und liess Kopf-Cosmetics knapp 1 Pixel zu hoch schweben*/
+    private static final double CROUCH_HEAD_DROP = 4.2D / 16.0D;
 
     /**
      * Ein Controller pro (Spieler + Cosmetic): der Animationszustand liegt in
