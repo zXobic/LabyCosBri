@@ -8,15 +8,20 @@
 > interfaces. "LabyMod" is a trademark of LabyMedia GmbH; it is mentioned
 > solely to describe compatibility.
 
-A client-side mod for Minecraft, currently compatible with NeoForge 1.21.1.
+A client-side mod for Minecraft, compatible with **NeoForge 1.21.1**.
 This mod displays certain cosmetics in-game by querying publicly accessible
 interfaces.
+
+> The Fabric 26.3 version lives on the [`fabric-26.3`](../../tree/fabric-26.3) branch.
 
 ## Features
 
 - **Capes / Cloaks** – with animation
-- **Wings / Auras / Backs / Hats / Underglows** – fully dynamic: geometry,
-  texture, animation and coloring are all loaded at runtime
+- **Wings / Auras / Backs / Hats / Headgear / Face / Underglows** – fully
+  dynamic: geometry, texture, animation and coloring are all loaded at runtime
+- **Glow** – glowing parts light up in the dark
+- **Colors & offsets** – your chosen colors and the adjustable offset (e.g.
+  halo height) are applied
 - **Animated textures** – cosmetics with multi-frame textures play their
   animation
 - **Multiplayer** – cosmetics are shown for other players too, not just
@@ -49,10 +54,11 @@ body part.
 
 ## Status
 
-In development. Around 190 of the roughly 610 cosmetics in the catalog are
-supported. The categories listed above work, for the local player and for other
-players. Multiplayer has so far only been tested with two players, not with
-larger numbers. Additional cosmetic types are a possible next step.
+In development. Around 310 of the roughly 590 cosmetics in the catalog belong
+to the supported categories. The categories listed above work, for the local
+player and for other players. Multiplayer has so far only been tested with two
+players, not with larger numbers. Cosmetics attached to arms or legs, pets and
+physics effects are possible next steps.
 
 ## License
 

@@ -9,16 +9,21 @@
 > Marke der LabyMedia GmbH; die Nennung dient ausschließlich der Beschreibung
 > der Kompatibilität.
 
-Es handelt sich um eine clientseitige Mod für Minecraft. Aktuell kompatibel mit
-NeoForge 1.21.1. Diese Mod stellt bestimmte Cosmetics im Spiel dar, indem sie
-öffentlich erreichbare Schnittstellen abfragt.
+Es handelt sich um eine clientseitige Mod für Minecraft, kompatibel mit
+**NeoForge 1.21.1**. Diese Mod stellt bestimmte Cosmetics im Spiel dar, indem
+sie öffentlich erreichbare Schnittstellen abfragt.
+
+> Die Fabric-26.3-Version liegt im Branch [`fabric-26.3`](../../tree/fabric-26.3).
 
 ## Features
 
 - **Capes / Cloaks** – mit Animation
-- **Flügel (Wings) / Auren / Backs / Hüte / Underglows** – vollständig
-  dynamisch: Geometrie, Textur, Animation und Färbung werden zur Laufzeit
-  geladen
+- **Flügel (Wings) / Auren / Backs / Hüte / Headgear / Gesicht / Underglows** –
+  vollständig dynamisch: Geometrie, Textur, Animation und Färbung werden zur
+  Laufzeit geladen
+- **Leuchten (Glow)** – leuchtende Teile strahlen auch im Dunkeln
+- **Farben & Offsets** – die gewählten Farben und der einstellbare Offset
+  (z. B. Halo-Höhe) werden übernommen
 - **Animierte Texturen** – Cosmetics mit mehreren Frames werden abgespielt
 - **Mehrspieler** – Cosmetics werden auch für andere Spieler dargestellt,
   nicht nur für einen selbst (bisher mit zwei Spielern getestet)
@@ -51,11 +56,11 @@ zeichnen.
 
 ## Status
 
-In Entwicklung. Rund 190 der etwa 610 Cosmetics im Katalog werden dargestellt.
-Die oben genannten Kategorien funktionieren, für den lokalen Spieler und für
-andere Spieler. Der Mehrspieler-Betrieb wurde bisher nur mit zwei Spielern
-getestet, nicht mit größeren Zahlen. Weitere Cosmetic-Typen sind ein möglicher
-nächster Schritt.
+In Entwicklung. Rund 310 der etwa 590 Cosmetics im Katalog gehören zu den
+unterstützten Kategorien. Die oben genannten Kategorien funktionieren, für den
+lokalen Spieler und für andere Spieler. Der Mehrspieler-Betrieb wurde bisher nur
+mit zwei Spielern getestet, nicht mit größeren Zahlen. Cosmetics an Armen oder
+Beinen, Pets und Physik-Effekte sind mögliche nächste Schritte.
 
 ## Lizenz
 
