@@ -18,31 +18,28 @@
 package com.example.labycosmetics.cosmetic;
 
 import com.example.labycosmetics.LabyCosmeticsMod;
+import com.example.labycosmetics.api.Http;
+import com.example.labycosmetics.api.LoadTracker;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Laedt einmalig den kompletten LabyMod-Cosmetic-Katalog
+ * Laedt den kompletten LabyMod-Cosmetic-Katalog
  * (https://dl.labymod.net/cosmetics/index.json) und stellt zu jeder
  * Cosmetic-ID die Metadaten bereit (Kategorie, Position, Skalierung,
  * texture_directory usw.).
+ * <p>
+ * Schlaegt der Abruf fehl, wird mit wachsendem Abstand neu versucht (siehe
+ * {@link LoadTracker}) - frueher blieb der Katalog dann bis zum Neustart leer.
  */
 public final class CosmeticCatalog {
 
     private static final String INDEX_URL = "https://dl.labymod.net/cosmetics/index.json";
-
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    private static final String KEY = "index";
 
     /** Metadaten eines Cosmetics aus dem Katalog. */
     public record CosmeticMeta(
@@ -53,21 +50,26 @@ public final class CosmeticCatalog {
             float scale,
             java.util.List<String> defaultData,   // [textur-uuid, farbe1, ...]
             int frameAspectWidth,     // frame_aspect_ratio.width  (Frame-Seitenverhaeltnis)
-            int frameAspectHeight) {  // frame_aspect_ratio.height
+            int frameAspectHeight,    // frame_aspect_ratio.height
+            String attachedTo,        // HEAD, BODY, ARM, LEG (kann null sein)
+            java.util.List<String> options) { // Bedeutung der d-Eintraege, z.B. [texture, rgb, offset]
+
+        /** Haengt am Kopf (dreht mit Yaw/Pitch mit)? Katalog-Scan: alle HAT, FACE und
+         *  66 von 68 HEADGEAR sind HEAD - die Kategorie allein reicht also nicht. */
+        public boolean attachedToHead() {
+            return "HEAD".equals(attachedTo);
+        }
     }
 
-    private enum State { NOT_STARTED, LOADING, LOADED, FAILED }
-
-    private static volatile State state = State.NOT_STARTED;
+    private static final LoadTracker<String> STATE = new LoadTracker<>();
     private static final Map<Integer, CosmeticMeta> CATALOG = new ConcurrentHashMap<>();
 
     private CosmeticCatalog() {
     }
 
-    /** Startet das Laden des Katalogs, falls noch nicht geschehen. */
+    /** Startet das Laden des Katalogs, falls noch nicht geschehen (oder Retry faellig). */
     public static void ensureLoading() {
-        if (state == State.NOT_STARTED) {
-            state = State.LOADING;
+        if (STATE.tryStart(KEY)) {
             requestIndex();
         }
     }
@@ -79,39 +81,33 @@ public final class CosmeticCatalog {
     }
 
     public static boolean isLoaded() {
-        return state == State.LOADED;
+        return STATE.isLoaded(KEY);
     }
 
     private static void requestIndex() {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(INDEX_URL))
-                .timeout(Duration.ofSeconds(15))
-                .GET()
-                .build();
-
-        CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+        Http.getString(INDEX_URL, Duration.ofSeconds(15))
                 .thenAccept(response -> {
                     if (response.statusCode() != 200) {
                         LabyCosmeticsMod.LOGGER.warn(
                                 "[LabyCosmetics] index.json lieferte Status {}", response.statusCode());
-                        state = State.FAILED;
+                        STATE.failed(KEY);
                         return;
                     }
                     try {
                         parse(response.body());
-                        state = State.LOADED;
+                        STATE.loaded(KEY);
                         LabyCosmeticsMod.LOGGER.info(
                                 "[LabyCosmetics] Katalog geladen: {} Cosmetics bekannt.", CATALOG.size());
                     } catch (Exception e) {
                         LabyCosmeticsMod.LOGGER.warn(
                                 "[LabyCosmetics] index.json nicht lesbar: {}", e.getMessage());
-                        state = State.FAILED;
+                        STATE.failed(KEY);
                     }
                 })
                 .exceptionally(t -> {
                     LabyCosmeticsMod.LOGGER.warn(
                             "[LabyCosmetics] index.json-Abruf fehlgeschlagen: {}", t.getMessage());
-                    state = State.FAILED;
+                    STATE.failed(KEY);
                     return null;
                 });
     }
@@ -152,8 +148,17 @@ public final class CosmeticCatalog {
                 if (frameH <= 0) { frameH = 1; }
             }
 
+            String attachedTo = getStringOrNull(obj, "attached_to");
+            java.util.List<String> options = new java.util.ArrayList<>();
+            if (obj.has("options") && obj.get("options").isJsonArray()) {
+                for (var el : obj.getAsJsonArray("options")) {
+                    options.add(el.isJsonNull() ? "" : el.getAsString());
+                }
+            }
+
             CATALOG.put(id, new CosmeticMeta(
-                    id, category, position, textureDir, scale, defaultData, frameW, frameH));
+                    id, category, position, textureDir, scale, defaultData, frameW, frameH,
+                    attachedTo, java.util.List.copyOf(options)));
         }
     }
 

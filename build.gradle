@@ -21,6 +21,9 @@ neoForge {
         client {
             client()
             systemProperty 'neoforge.enabledGameTestNamespaces', mod_id
+            // Testmodus: feste Cosmetic-IDs, kommagetrennt. Leer/weg = Normalbetrieb.
+            // Wirkt NUR in der Entwicklungsumgebung, nie im ausgelieferten Jar.
+            systemProperty 'labycosbri.testIds', '9,1369'
         }
         server {
             server()

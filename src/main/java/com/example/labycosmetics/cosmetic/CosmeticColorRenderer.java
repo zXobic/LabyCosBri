@@ -18,14 +18,21 @@
 package com.example.labycosmetics.cosmetic;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.logging.LogUtils;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.logging.LogUtils;
 import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.LightTexture;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.ResourceLocation;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.WeakHashMap;
 
 /**
  * Rendert Cosmetic-Teile mit den passenden Farben.
@@ -45,6 +52,18 @@ import java.util.Map;
  * <h3>Technik: skipDraw</h3>
  * Pro Farbe rendern wir das ganze Modell einmal und ueberspringen per
  * {@link ModelPart#skipDraw} alle Bones, die nicht zu dieser Farbe gehoeren.
+ *
+ * <h3>Aenderungen (aus der Fabric-26.3-Version uebernommen)</h3>
+ * <ul>
+ *   <li>Die Klassifizierung (Farbe, Glow, Rainbow, versteckte Layer) haengt nur
+ *       vom Modell und der getragenen Textur ab, nicht vom Frame. Frueher wurde
+ *       sie JEDEN Frame pro Spieler neu berechnet - inkl. linearer Suche in
+ *       {@code parentOf} fuer jeden Ahnen jedes Bones. Jetzt einmal berechnet
+ *       und in {@link #CACHE} gehalten ({@link #classify}).</li>
+ *   <li>Zeichnen und Glow sind getrennte Methoden ({@link #renderBase},
+ *       {@link #renderGlow}). {@link #render} ruft beide nacheinander mit dem
+ *       passenden RenderType auf.</li>
+ * </ul>
  */
 public final class CosmeticColorRenderer {
 
@@ -54,60 +73,474 @@ public final class CosmeticColorRenderer {
      *  am selben Wing (1460 oder 855) im Dunkeln. */
     private static final boolean TEST_NO_GLOW = false;
 
-    /** TEMP-DIAGNOSE: merkt sich, fuer welche Texturen schon geloggt wurde,
-     *  damit die Layers-Zeile nicht pro Frame feuert. Wieder entfernen. */
-    private static final java.util.Set<String> DIAG_LOGGED =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private enum ColorClass { C0, C1, C2, C3, RAINBOW, REST }
+
+    /** Die Farben eines getragenen Cosmetics. c2/c3 duerfen null sein. */
+    public record Colors(float[] c0, float[] c1, float[] c2, float[] c3, float[] rest) {
+
+        /**
+         * Aus den Modell-Farben (color_0, color_1, ... in Reihenfolge, siehe
+         * {@link CosmeticData}). Frueher wurden die Farben fest ab data[1] gelesen -
+         * bei Cosmetics mit offset-Option landete der Offset-String als Farbe.
+         */
+        public static Colors fromColors(java.util.List<String> hex) {
+            String hex0 = at(hex, 0);
+            String hex1 = at(hex, 1);
+            String hex2 = at(hex, 2);
+            String hex3 = at(hex, 3);
+            float[] c0 = hexToRgb(hex0);
+            float[] c1 = hexToRgb(hex1);
+            float[] c2 = hex2 != null ? hexToRgb(hex2) : null;
+            float[] c3 = hex3 != null ? hexToRgb(hex3) : null;
+            // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...): die letzte
+            // tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
+            float[] rest = c3 != null ? c3 : c2 != null ? c2 : hex1 != null ? c1 : c0;
+            return new Colors(c0, c1, c2, c3, rest);
+        }
+
+        private static String at(java.util.List<String> data, int index) {
+            return (data != null && index < data.size()) ? data.get(index) : null;
+        }
+
+        float[] of(ColorClass c) {
+            return switch (c) {
+                case C0 -> c0;
+                case C1 -> c1;
+                case C2 -> c2;
+                case C3 -> c3;
+                case REST -> rest;
+                case RAINBOW -> null;
+            };
+        }
+    }
 
     /**
-     * Glueht dieser Bone? Wahr, wenn er selbst oder ein VORFAHRE mit "glow"
-     * beginnt - dieselbe Ketten-Vererbung wie bei der Farbe, weil der Effekt
-     * laut Doku "on its children" wirkt (855: glow_plane7 -> color_0_a, der
-     * FLAECHEN-tragende color-Bone haengt UNTER dem glow-Bone).
-     * <p>
-     * WICHTIG - Doku vs. Material: Die offizielle Glow-Doku beschreibt einen
-     * Vierteiler glow_STAERKE_FARBE_NAME. Ein Katalog-Scan ueber alle 203
-     * glow-Bones zeigt AUSNAHMSLOS den Zweiteiler glow_NAME - Staerke und Farbe
-     * sind im Material NICHT kodiert. Deshalb emissiv ohne Parameter. Glow ist
-     * orthogonal zur Farbe: der Bone behaelt seine Farbklasse, nur das Licht
-     * geht auf Maximum.
+     * Ergebnis der Klassifizierung eines Modells fuer EINE getragene Textur.
+     * Unveraenderlich nach dem Bauen; {@code classOf == null} fuer einen Bone
+     * heisst "versteckter Layer".
      */
-    private static boolean glowsWithInheritance(String boneName, BedrockGeometry geo) {
-        String current = boneName;
-        int guard = 0;
-        while (current != null && guard++ < 100) {
-            if (current.startsWith("glow") && !isRootBone(current, geo)) {
-                return true;
-            }
-            current = parentOf(current, geo);
+    public static final class Classification {
+        private final Map<String, ColorClass> classOf = new HashMap<>();
+        private final Map<String, Boolean> glowOf = new HashMap<>();
+        private final Map<String, Integer> rainbowOf = new HashMap<>();
+        private int glowCount;
+        private int[] rainbowCycles = new int[0];
+
+        public boolean hasGlow() {
+            return glowCount > 0;
         }
-        return false;
     }
+
+    /**
+     * Cache: Modell-Wurzel -> (Textur-UUID -> Klassifizierung). Schluessel ist
+     * der ModelPart (Identitaets-Hash), nicht der BuiltCosmeticModel-Record,
+     * dessen hashCode die ganze Bone-Map durchlaufen wuerde. Nur vom
+     * Render-Thread benutzt, daher keine Synchronisierung.
+     */
+    private static final Map<ModelPart, Map<String, Classification>> CACHE = new WeakHashMap<>();
 
     private CosmeticColorRenderer() {
     }
 
-    /**
-     * Ein glow-Bone zaehlt NUR als Effekt, wenn er nicht die Wurzel ist.
-     * <p>
-     * Beleg (geo.json von zwei Wings): 855 hat die glow-Bones MITTEN in der
-     * Kette (bone7 -> glow_plane7 -> color_0_a), dort ist die Vererbung auf die
-     * Kinder gewollt. 1460 dagegen heisst der WURZEL-Bone "glow_main" - das ist
-     * ein Struktur-Name, kein Effekt; wuerde er zaehlen, gluehte das ganze
-     * Modell (Log zeigte "33 von 33"). Regel: Wurzel-glow ignorieren.
-     * <p>
-     * UNGEMESSEN/BEWUSST: nur an 855 + 1460 geo-belegt. Ein Wing mit ECHTEM
-     * Glow direkt am Wurzel-Bone bliebe dunkel - kein bekannter Fall. Der
-     * verworfene Wurzel-glow wird in renderColored geloggt, damit ein solcher
-     * Fall im Log auffaellt statt still falsch zu sein.
-     */
-    private static boolean isRootBone(String boneName, BedrockGeometry geo) {
+    // ------------------------------------------------------------------
+    // Klassifizierung (einmal pro Modell + Textur)
+    // ------------------------------------------------------------------
+
+    /** Klassifizierung holen oder einmalig berechnen. Render-Thread. */
+    public static Classification classify(BuiltCosmeticModel built, String textureUuid) {
+        String key = textureUuid == null ? "" : textureUuid;
+        return CACHE.computeIfAbsent(built.root(), k -> new HashMap<>())
+                .computeIfAbsent(key, k -> compute(built, textureUuid));
+    }
+
+    private static Classification compute(BuiltCosmeticModel built, String textureUuid) {
+        Map<String, ModelPart> bones = built.bonesByName();
+        BedrockGeometry geo = built.geometry();
+        Map<String, String> parents = parentIndex(geo);
+
+        // Layers-Effekt: Nur filtern, wenn es tatsaechlich MEHRERE Textur-Varianten
+        // gibt. Bei genau einem layer_-Ast (963, 855) gibt es nichts zu waehlen -
+        // der muss immer sichtbar bleiben, auch wenn die getragene UUID abweicht
+        // (im Dev-Client kommt sie aus defaultData und passt nie).
+        Set<String> variants = new HashSet<>();
         for (BedrockGeometry.Bone b : geo.bones) {
-            if (b.name.equals(boneName)) {
-                return b.parent == null;
+            String u = layerUuidOf(b.name);
+            if (u != null) {
+                variants.add(u);
             }
         }
+        boolean filterLayers = variants.size() > 1;
+
+        Classification c = fill(bones, parents, filterLayers ? textureUuid : null);
+
+        // Sicherheitsnetz: Passt die getragene UUID zu KEINER Variante, waere das
+        // ganze Cosmetic weg. Belegt an 1809 Fire Underglow (2 Varianten, getragene
+        // Textur 3f6d8d8f-... gehoert zu keiner: "79 von 79 ausgeblendet"). Dann auf
+        // die erste Variante zurueckfallen - eine zu zeigen ist besser als keine,
+        // und besser als alle uebereinander (1309: zerrissene Optik).
+        int hidden = countHidden(c, bones);
+        if (filterLayers && !bones.isEmpty() && hidden == bones.size()) {
+            String fallback = new TreeSet<>(variants).first();
+            LOGGER.debug("[LabyCos] Layers: getragene Textur {} passt zu keiner der {} "
+                    + "Varianten - falle auf {} zurueck", textureUuid, variants.size(), fallback);
+            c = fill(bones, parents, fallback);
+            hidden = countHidden(c, bones);
+        }
+
+        // Pruefsteine, jetzt einmal pro Modell+Textur statt pro Frame.
+        // Glow: >0 fuer Glow-Wings (855, 1460), 0 fuer die Gegenprobe (24, 404).
+        // Wurzel-glow-Bones getrennt zaehlen: die werden bewusst NICHT als Effekt
+        // gewertet (Struktur-Name wie 1460 "glow_main").
+        int rootGlow = 0;
+        int rainbowCount = 0;
+        for (String name : bones.keySet()) {
+            if (name.startsWith("glow") && parents.containsKey(name) && parents.get(name) == null) {
+                rootGlow++;
+            }
+            if (c.classOf.get(name) == ColorClass.RAINBOW) {
+                rainbowCount++;
+            }
+        }
+        LOGGER.debug("[LabyCos] {} ({}): {} Bones, {} ausgeblendet, {} gluehen, {} Wurzel-glow verworfen, "
+                        + "{} Rainbow (Zyklen {})",
+                textureUuid, variants.size() + " Varianten", bones.size(), hidden, c.glowCount, rootGlow,
+                rainbowCount, java.util.Arrays.toString(c.rainbowCycles));
+        return c;
+    }
+
+    /**
+     * Fuellt eine Klassifizierung. {@code visibleLayer} = UUID der sichtbaren
+     * Layer-Variante, oder null = keine Layer filtern.
+     */
+    private static Classification fill(Map<String, ModelPart> bones, Map<String, String> parents,
+                                       String visibleLayer) {
+        Classification c = new Classification();
+        Set<Integer> cycles = new TreeSet<>();
+        for (String name : bones.keySet()) {
+            if (visibleLayer != null && isHiddenLayer(name, parents, visibleLayer)) {
+                c.classOf.put(name, null);
+                c.glowOf.put(name, false);
+                c.rainbowOf.put(name, 0);
+                continue;
+            }
+            ColorClass cls = classifyWithInheritance(name, parents);
+            c.classOf.put(name, cls);
+            int rainbow = rainbowWithInheritance(name, parents);
+            c.rainbowOf.put(name, rainbow);
+            if (cls == ColorClass.RAINBOW) {
+                cycles.add(rainbow);
+            }
+            boolean g = !TEST_NO_GLOW && glowsWithInheritance(name, parents);
+            c.glowOf.put(name, g);
+            if (g) {
+                c.glowCount++;
+            }
+        }
+        c.rainbowCycles = cycles.stream().mapToInt(Integer::intValue).toArray();
+        return c;
+    }
+
+    private static int countHidden(Classification c, Map<String, ModelPart> bones) {
+        int hidden = 0;
+        for (String name : bones.keySet()) {
+            if (c.classOf.get(name) == null) {
+                hidden++;
+            }
+        }
+        return hidden;
+    }
+
+    /**
+     * Bone-Name -> Parent-Name, einmal aufgebaut. Ersetzt die fruehere lineare
+     * Suche ueber alle Bones bei jedem Schritt die Ahnenkette hinauf.
+     * Wurzel-Bones sind mit Wert null enthalten.
+     */
+    private static Map<String, String> parentIndex(BedrockGeometry geo) {
+        Map<String, String> parents = new HashMap<>();
+        for (BedrockGeometry.Bone b : geo.bones) {
+            parents.put(b.name, b.parent);
+        }
+        return parents;
+    }
+
+    /** Parent eines Bones, inkl. der _rc-Zwischenbones (die nicht in der geo stehen). */
+    private static String parentOf(String boneName, Map<String, String> parents) {
+        if (parents.containsKey(boneName)) {
+            return parents.get(boneName);
+        }
+        int idx = boneName.lastIndexOf("_rc");
+        if (idx > 0) {
+            return boneName.substring(0, idx);
+        }
+        return null;
+    }
+
+    /**
+     * Glueht dieser Bone? Wahr, wenn er selbst oder ein VORFAHRE mit "glow"
+     * beginnt - dieselbe Ketten-Vererbung wie bei der Farbe, weil der Effekt
+     * laut Doku "on its children" wirkt.
+     * <p>
+     * Das gilt AUCH fuer den Wurzel-Bone. Eine fruehere Regel hat Wurzel-glow
+     * (z.B. 1460 "glow_main", Halo 9 "glow_a") als reinen Struktur-Namen
+     * ignoriert. WIDERLEGT im Vergleich mit LabyMod 26.3 in einer dunklen Hoehle:
+     * Halo und Angel Wings leuchten dort komplett. 27 Cosmetics haben einen
+     * glow-Bone als Wurzel (u.a. Fire Arms, Lightning Cloak, Fireworks).
+     * <p>
+     * Doku vs. Material: Die offizielle Glow-Doku beschreibt einen Vierteiler
+     * glow_STAERKE_FARBE_NAME. Ein Katalog-Scan ueber alle 203 glow-Bones zeigt
+     * AUSNAHMSLOS den Zweiteiler glow_NAME - deshalb emissiv ohne Parameter.
+     */
+    private static boolean glowsWithInheritance(String boneName, Map<String, String> parents) {
+        String current = boneName;
+        int guard = 0;
+        while (current != null && guard++ < 100) {
+            if (current.startsWith("glow")) {
+                return true;
+            }
+            current = parentOf(current, parents);
+        }
         return false;
+    }
+
+    private static ColorClass classifyWithInheritance(String boneName, Map<String, String> parents) {
+        String current = boneName;
+        int guard = 0;
+        while (current != null && guard++ < 100) {
+            if (current.startsWith("color_rainbow")) return ColorClass.RAINBOW;
+            if (current.startsWith("color_0")) return ColorClass.C0;
+            if (current.startsWith("color_1")) return ColorClass.C1;
+            if (current.startsWith("color_2")) return ColorClass.C2;
+            if (current.startsWith("color_3")) return ColorClass.C3;
+            current = parentOf(current, parents);
+        }
+        return ColorClass.REST;
+    }
+
+    /**
+     * Die Textur-UUID aus einem {@code layer_<uuid>}-Bone-Namen, oder null wenn
+     * der Bone kein UUID-Layer ist. Suffixe wie "_rgb" oder "_2021" werden
+     * abgeschnitten; layer_slim / layer_right / layer_left liefern null.
+     */
+    private static String layerUuidOf(String boneName) {
+        if (!boneName.startsWith("layer_")) {
+            return null;
+        }
+        String rest = boneName.substring("layer_".length()).toLowerCase(java.util.Locale.ROOT);
+        if (rest.length() < 32) {
+            return null;
+        }
+        String uuid = rest.substring(0, 32);
+        return uuid.matches("[0-9a-f]{32}") ? uuid : null;
+    }
+
+    /**
+     * Gehoert dieser Bone zu einer Textur-Variante, die NICHT getragen wird?
+     * Belegt an 1309 Witch Hat (drei layer_-Aeste, 48 von 64 Bones fremd).
+     * Geprueft wird die ganze Ahnenkette.
+     *
+     * @param textureUuid sichtbare Textur-UUID (mit oder ohne Bindestriche)
+     */
+    private static boolean isHiddenLayer(String name, Map<String, String> parents, String textureUuid) {
+        String worn = textureUuid.replace("-", "").toLowerCase(java.util.Locale.ROOT);
+        String cur = name;
+        int guard = 0;
+        while (cur != null && guard++ < 100) {
+            String uuid = layerUuidOf(cur);
+            if (uuid != null && !uuid.equals(worn)) {
+                return true;
+            }
+            cur = parentOf(cur, parents);
+        }
+        return false;
+    }
+
+    /**
+     * Dauer eines Regenbogen-Durchlaufs in ms aus dem Bone-Namen, 0 wenn kein
+     * Rainbow-Bone. Format laut Colors-Doku: {@code color_rainbow_<dauer_ms>[_name]}.
+     * Fast immer 10000; Cap 19 und Hobby Horse 1160 haben zusaetzlich 10001.
+     */
+    private static int rainbowDurationOf(String boneName) {
+        final String prefix = "color_rainbow_";
+        if (!boneName.startsWith(prefix)) {
+            return 0;
+        }
+        String rest = boneName.substring(prefix.length());
+        int end = 0;
+        while (end < rest.length() && Character.isDigit(rest.charAt(end))) {
+            end++;
+        }
+        if (end == 0) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(rest.substring(0, end));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** Dauer des naechsten Rainbow-VORFAHREN - gleiche Ketten-Vererbung wie Farbe/Glow. */
+    private static int rainbowWithInheritance(String boneName, Map<String, String> parents) {
+        String current = boneName;
+        int guard = 0;
+        while (current != null && guard++ < 100) {
+            int d = rainbowDurationOf(current);
+            if (d > 0) {
+                return d;
+            }
+            current = parentOf(current, parents);
+        }
+        return 0;
+    }
+
+    // ------------------------------------------------------------------
+    // Zeichnen
+    // ------------------------------------------------------------------
+
+    /**
+     * Zeichnet ein Cosmetic komplett: erst den normalen Durchgang, dann - falls
+     * vorhanden - die leuchtenden Teile emissiv.
+     * <p>
+     * Reihenfolge ist wichtig: {@code buffer.getBuffer(...)} mit einem ANDEREN
+     * RenderType schliesst den vorherigen Puffer ab. Der Translucent-Consumer darf
+     * nach dem Holen des Emissive-Puffers nicht mehr benutzt werden.
+     */
+    public static void render(PoseStack poseStack, MultiBufferSource buffer, ResourceLocation texture,
+                              int packedLight, BuiltCosmeticModel built,
+                              Classification cls, Colors colors) {
+        renderBase(poseStack, buffer.getBuffer(RenderType.entityTranslucent(texture)),
+                packedLight, built, cls, colors);
+        if (cls.hasGlow()) {
+            renderGlow(poseStack, buffer.getBuffer(RenderType.entityTranslucentEmissive(texture)),
+                    built, cls, colors);
+        }
+    }
+
+    /**
+     * Durchgang A - normale Farbe, ganzes Modell (glow-Teile inklusive, damit
+     * sie ihre Grundfarbe/Form behalten), danach die Rainbow-Bones.
+     * <p>
+     * Der consumer wird in einen FlatNormalConsumer gewickelt: der zwingt jede
+     * Vertex-Normale auf einen festen Wert, damit die Vanilla-Richtungs-
+     * schattierung konstant ist und nicht auf die Sneak-Neigung reagiert.
+     */
+    public static void renderBase(PoseStack poseStack, VertexConsumer consumer, int packedLight,
+                                  BuiltCosmeticModel built, Classification cls, Colors colors) {
+        VertexConsumer flat = new FlatNormalConsumer(consumer);
+        ModelPart root = built.root();
+        Map<String, ModelPart> bones = built.bonesByName();
+
+        for (ColorClass c : new ColorClass[]{ColorClass.C0, ColorClass.C1, ColorClass.C2,
+                ColorClass.C3, ColorClass.REST}) {
+            float[] rgb = colors.of(c);
+            if (rgb == null) {
+                continue;
+            }
+            if (selectBones(bones, cls, c, false, 0)) {
+                root.render(poseStack, flat, packedLight, OverlayTexture.NO_OVERLAY, packColor(rgb));
+            }
+        }
+
+        // Regenbogen: Farbe kommt aus der Uhr, nicht aus den getragenen Daten.
+        // Ein Pass je vorkommender Zyklusdauer (Cap 19 hat 10000 UND 10001).
+        for (int d : cls.rainbowCycles) {
+            if (selectBones(bones, cls, ColorClass.RAINBOW, false, d)) {
+                root.render(poseStack, flat, packedLight, OverlayTexture.NO_OVERLAY,
+                        packColor(rainbowColor(d)));
+            }
+        }
+
+        resetSkip(bones);
+    }
+
+    /**
+     * Durchgang B - GLOW: die gluehenden Bones emissiv, in der Farbe ihrer
+     * Farbklasse (blauer Stern strahlt blau, nicht weiss). Gehoert zu einem
+     * RenderType wie entityTranslucentEmissive: der respektiert Alpha UND leuchtet
+     * (eyes wuerde das ganze Cube-Rechteck ausleuchten).
+     * <p>
+     * Die Helligkeit regelt {@link #GLOW_STRENGTH}: die Farbe wird damit
+     * abgedunkelt, weil der emissive RenderType das Umgebungslicht ignoriert.
+     * <p>
+     * Rainbow-Bones koennen ebenfalls gluehen - bei 1369 haengen alle 16 unter
+     * glow_rainbow1 / glow_rainbow2. Daher ein eigener Durchgang je Zyklusdauer.
+     */
+    public static void renderGlow(PoseStack poseStack, VertexConsumer consumer,
+                                  BuiltCosmeticModel built, Classification cls, Colors colors) {
+        VertexConsumer flat = new FlatNormalConsumer(consumer);
+        ModelPart root = built.root();
+        Map<String, ModelPart> bones = built.bonesByName();
+
+        for (ColorClass c : new ColorClass[]{ColorClass.C0, ColorClass.C1, ColorClass.C2,
+                ColorClass.C3, ColorClass.REST}) {
+            float[] rgb = colors.of(c);
+            if (rgb == null) {
+                continue;
+            }
+            if (selectBones(bones, cls, c, true, 0)) {
+                root.render(poseStack, flat, LightTexture.FULL_BRIGHT,
+                        OverlayTexture.NO_OVERLAY, packColor(glowDimmed(rgb)));
+            }
+        }
+        for (int d : cls.rainbowCycles) {
+            if (selectBones(bones, cls, ColorClass.RAINBOW, true, d)) {
+                root.render(poseStack, flat, LightTexture.FULL_BRIGHT,
+                        OverlayTexture.NO_OVERLAY, packColor(glowDimmed(rainbowColor(d))));
+            }
+        }
+
+        resetSkip(bones);
+    }
+
+    /**
+     * Glow-Staerke in Prozent (0-100). Die LabyMod-Doku sieht eine Staerke im
+     * Bone-Namen vor (glow_STAERKE_FARBE_NAME), aber KEIN Cosmetic im Katalog nutzt
+     * das (alle 203 glow-Bones heissen glow_NAME). LabyMod hat also einen internen
+     * Standardwert, der nicht oeffentlich ist.
+     * KALIBRIERWERT: im Dunkeln neben LabyMod vergleichen und anpassen.
+     * 100 = volle Leuchtkraft, kleiner = gedaempfter.
+     */
+    private static final float GLOW_STRENGTH = 100f;
+
+    /** Farbe mit der Glow-Staerke abgedunkelt. */
+    private static float[] glowDimmed(float[] rgb) {
+        float k = Math.max(0f, Math.min(100f, GLOW_STRENGTH)) / 100f;
+        return new float[]{rgb[0] * k, rgb[1] * k, rgb[2] * k};
+    }
+    /**
+     * Setzt skipDraw so, dass nur die gewuenschten Bones gezeichnet werden.
+     * <p>
+     * Leuchtende Bones landen NUR im Glow-Durchgang, nicht-leuchtende NUR im
+     * normalen. Frueher wurden leuchtende Teile in beiden gezeichnet (Glow obendrauf).
+     * Gleiches Verhalten wie in der Fabric-26.3-Version (dort war es noetig, weil
+     * Minecraft ab 26.2 die Reihenfolge selbst sortiert); so ueberlappen sie nie.
+     *
+     * @param glowing      true = nur leuchtende Bones, false = nur nicht-leuchtende
+     * @param rainbowCycle bei RAINBOW: nur Bones dieser Zyklusdauer
+     * @return ob ueberhaupt ein Bone gezeichnet wird
+     */
+    private static boolean selectBones(Map<String, ModelPart> bones, Classification cls,
+                                       ColorClass wanted, boolean glowing, int rainbowCycle) {
+        boolean any = false;
+        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
+            String name = entry.getKey();
+            boolean draw = cls.classOf.get(name) == wanted;
+            if (draw && wanted == ColorClass.RAINBOW) {
+                draw = cls.rainbowOf.get(name) == rainbowCycle;
+            }
+            if (draw) {
+                draw = Boolean.TRUE.equals(cls.glowOf.get(name)) == glowing;
+            }
+            entry.getValue().skipDraw = !draw;
+            any |= draw;
+        }
+        return any;
+    }
+
+    private static void resetSkip(Map<String, ModelPart> bones) {
+        for (ModelPart part : bones.values()) {
+            part.skipDraw = false;
+        }
     }
 
     /** Wandelt einen Hex-String wie "8c8989" in ein float[3] mit r,g,b in 0..1. */
@@ -129,233 +562,28 @@ public final class CosmeticColorRenderer {
         }
     }
 
-    private enum ColorClass { C0, C1, C2, C3, REST }
-
-    private static ColorClass classifyWithInheritance(String boneName, BedrockGeometry geo) {
-        String current = boneName;
-        int guard = 0;
-        while (current != null && guard++ < 100) {
-            if (current.startsWith("color_0")) return ColorClass.C0;
-            if (current.startsWith("color_1")) return ColorClass.C1;
-            if (current.startsWith("color_2")) return ColorClass.C2;
-            if (current.startsWith("color_3")) return ColorClass.C3;
-            current = parentOf(current, geo);
-        }
-        return ColorClass.REST;
-    }
-
-    private static String parentOf(String boneName, BedrockGeometry geo) {
-        for (BedrockGeometry.Bone b : geo.bones) {
-            if (b.name.equals(boneName)) {
-                return b.parent;
-            }
-        }
-        int idx = boneName.lastIndexOf("_rc");
-        if (idx > 0) {
-            return boneName.substring(0, idx);
-        }
-        return null;
-    }
-
-    public static void renderColored(PoseStack poseStack, VertexConsumer consumer,
-                                     int packedLight, ModelPart root,
-                                     Map<String, ModelPart> bones, BedrockGeometry geo,
-                                     float[] color0, float[] color1,
-                                     float[] color2, float[] color3, float[] restColor,
-                                     net.minecraft.client.renderer.MultiBufferSource buffer,
-                                     net.minecraft.resources.ResourceLocation texture,
-                                     String textureUuid) {
-
-        // Layers-Effekt: Nur filtern, wenn es tatsaechlich MEHRERE Textur-Varianten
-        // gibt. Bei genau einem layer_-Ast (963, 855) gibt es nichts zu waehlen -
-        // der muss immer sichtbar bleiben, auch wenn die getragene UUID abweicht
-        // (im Dev-Client kommt sie aus defaultData und passt nie).
-        java.util.Set<String> variants = new java.util.HashSet<>();
-        for (BedrockGeometry.Bone b : geo.bones) {
-            String u = layerUuidOf(b.name);
-            if (u != null) {
-                variants.add(u);
-            }
-        }
-        boolean filterLayers = variants.size() > 1;
-
-        Map<String, ColorClass> classOf = new HashMap<>();
-        Map<String, Boolean> glowOf = new HashMap<>();
-        int glowCount = 0;
-        int hidden = 0;
-        for (String name : bones.keySet()) {
-            if (filterLayers && isHiddenLayer(name, geo, textureUuid)) {
-                classOf.put(name, null);
-                glowOf.put(name, false);
-                hidden++;
-                continue;
-            }
-            classOf.put(name, classifyWithInheritance(name, geo));
-            boolean g = !TEST_NO_GLOW && glowsWithInheritance(name, geo);
-            glowOf.put(name, g);
-            if (g) {
-                glowCount++;
-            }
-        }
-        if (hidden > 0 && DIAG_LOGGED.add(textureUuid)) {
-            LOGGER.info("[LabyCos] Layers: {} von {} Bones ausgeblendet ({} Varianten), getragen = {}",
-                    hidden, bones.size(), variants.size(), textureUuid);
-        }
-        // Pruefstein: >0 fuer Glow-Wings (855, 1460), 0 fuer die Gegenprobe
-        // (24, 404). "kein Glow" und "Glow-Erkennung kaputt" saehen sonst
-        // gleich aus. Einmal pro render() - okay fuers Debuggen, spaeter still.
-        // Wurzel-glow-Bones getrennt zaehlen: die werden bewusst NICHT als
-        // Effekt gewertet (Struktur-Name wie 1460 "glow_main"). Taucht hier
-        // eine Zahl >0 auf und der Wing bleibt trotzdem komplett dunkel, ist
-        // das der Hinweis auf einen echten Wurzel-glow, den die Regel verwirft.
-        int rootGlow = 0;
-        for (String name : bones.keySet()) {
-            if (name.startsWith("glow") && isRootBone(name, geo)) {
-                rootGlow++;
-            }
-        }
-        LOGGER.debug("[LabyCos] Glow: {} von {} Bones gluehen, {} Wurzel-glow verworfen",
-                glowCount, bones.size(), rootGlow);
-
-        // Durchgang A - normale Farbe, ganzes Modell (glow-Teile inklusive, damit
-        // sie ihre Grundfarbe/Form behalten).
-        // consumer in einen FlatNormalConsumer wickeln: der zwingt jede Vertex-Normale
-        // auf einen festen Wert, damit die Vanilla-Richtungsschattierung KONSTANT ist
-        // und nicht mehr auf die Sneak-Neigung reagiert (Flaechen wurden sonst dunkler).
-        // Lichtkarte (packedLight) bleibt unberuehrt -> Hoehle/Nacht dunkeln weiterhin.
-        VertexConsumer flat = new FlatNormalConsumer(consumer);
-        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C0, color0);
-        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C1, color1);
-        if (color2 != null) {
-            renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C2, color2);
-        }
-        if (color3 != null) {
-            renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.C3, color3);
-        }
-        renderPass(poseStack, flat, packedLight, root, bones, classOf, ColorClass.REST, restColor);
-
-        // Durchgang B - GLOW: die gluehenden Bones nochmal emissiv obendrauf.
-        // entityTranslucentEmissive, NICHT eyes: eyes ignoriert das Alpha der
-        // Textur und leuchtet das ganze Cube-Rechteck aus - das Glow blutet dann
-        // ueber die Feder-Form hinaus (an 855 gesehen). entityTranslucentEmissive
-        // respektiert Alpha UND leuchtet. Eigener Consumer aus demselben buffer,
-        // Farbe der jeweiligen Farbklasse (blauer Stern strahlt blau, nicht weiss).
-        if (glowCount > 0) {
-            VertexConsumer glowConsumer = new FlatNormalConsumer(
-                    buffer.getBuffer(net.minecraft.client.renderer.RenderType.entityTranslucentEmissive(texture)));
-            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C0, color0);
-            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C1, color1);
-            if (color2 != null) {
-                glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C2, color2);
-            }
-            if (color3 != null) {
-                glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.C3, color3);
-            }
-            glowPass(poseStack, glowConsumer, root, bones, classOf, glowOf, ColorClass.REST, restColor);
-        }
-
-        for (ModelPart part : bones.values()) {
-            part.skipDraw = false;
-        }
-    }
-
-    private static void renderPass(PoseStack poseStack, VertexConsumer consumer,
-                                   int packedLight, ModelPart root,
-                                   Map<String, ModelPart> bones,
-                                   Map<String, ColorClass> classOf,
-                                   ColorClass wanted, float[] rgb) {
-        if (rgb == null) {
-            return;
-        }
-        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
-            boolean draw = classOf.get(entry.getKey()) == wanted;
-            entry.getValue().skipDraw = !draw;
-        }
-        int packedColor = packColor(rgb);
-        root.render(poseStack, consumer, packedLight, OverlayTexture.NO_OVERLAY, packedColor);
-    }
     /**
-     * Zeichnet NUR die gluehenden Bones der gewuenschten Farbklasse, ueber den
-     * emissiven Consumer. packedLight ist hier egal, weil der emissive Typ das
-     * Licht ohnehin ignoriert - wir geben FULL_BRIGHT der Form halber.
-     * Laeuft zusaetzlich zum normalen Durchgang, daher "strahlt" der Teil auf,
-     * statt ihn nur zu ersetzen.
+     * Farbe des Regenbogens zum aktuellen Zeitpunkt. Wall-Clock statt Game-Ticks,
+     * damit alle Betrachter synchron laufen.
+     * ANNAHME, nicht dokumentiert: voller HSV-Kreis bei Saettigung und Helligkeit 1.
      */
-    private static void glowPass(PoseStack poseStack, VertexConsumer glowConsumer,
-                                 ModelPart root, Map<String, ModelPart> bones,
-                                 Map<String, ColorClass> classOf,
-                                 Map<String, Boolean> glowOf,
-                                 ColorClass wanted, float[] rgb) {
-        if (rgb == null) {
-            return;
+    private static float[] rainbowColor(int durationMs) {
+        if (durationMs <= 0) {
+            return new float[]{1f, 1f, 1f};
         }
-        boolean any = false;
-        for (Map.Entry<String, ModelPart> entry : bones.entrySet()) {
-            String name = entry.getKey();
-            boolean draw = classOf.get(name) == wanted && Boolean.TRUE.equals(glowOf.get(name));
-            entry.getValue().skipDraw = !draw;
-            if (draw) {
-                any = true;
-            }
-        }
-        if (any) {
-            int packedColor = packColor(rgb);
-            root.render(poseStack, glowConsumer, LightTexture.FULL_BRIGHT,
-                    OverlayTexture.NO_OVERLAY, packedColor);
-        }
-    }
-
-    /**
-     * Die Textur-UUID aus einem {@code layer_<uuid>}-Bone-Namen, oder null wenn
-     * der Bone kein UUID-Layer ist. Suffixe wie "_rgb" oder "_2021" werden
-     * abgeschnitten; layer_slim / layer_right / layer_left liefern null (andere
-     * Faelle des Effekts, hier nicht behandelt).
-     */
-    private static String layerUuidOf(String boneName) {
-        if (!boneName.startsWith("layer_")) {
-            return null;
-        }
-        String rest = boneName.substring("layer_".length()).toLowerCase();
-        if (rest.length() < 32) {
-            return null;
-        }
-        String uuid = rest.substring(0, 32);
-        return uuid.matches("[0-9a-f]{32}") ? uuid : null;
-    }
-
-    /**
-     * Gehoert dieser Bone zu einer Textur-Variante, die NICHT getragen wird?
-     * <p>
-     * Layers-Effekt: Ein Cosmetic kann mehrere Varianten als getrennte
-     * {@code layer_<textur-uuid>}-Aeste enthalten (1309 Witch Hat hat drei -
-     * 48 von 64 Bones gehoeren zu fremden Varianten). Sichtbar ist nur der Ast,
-     * dessen UUID der getragenen Textur entspricht - belegt an 1309:
-     * default_data[0] = 921de76d-2de9-49b3-85fb-1c512e8ca740, Wurzel-Bone =
-     * layer_921de76d2de949b385fb1c512e8ca740 (gleiche UUID ohne Bindestriche,
-     * ggf. mit Suffix wie "_rgb" oder "_2021").
-     * <p>
-     * Geprueft wird die ganze Ahnenkette: Kinder eines fremden Astes muessen
-     * ebenfalls verschwinden. Wird nur aufgerufen, wenn es MEHRERE Varianten
-     * gibt - bei genau einem Ast (963, 855) gaebe es sonst nichts mehr zu sehen.
-     *
-     * @param textureUuid getragene Textur-UUID (mit Bindestrichen), darf null sein
-     */
-    private static boolean isHiddenLayer(String name, BedrockGeometry geo, String textureUuid) {
-        if (textureUuid == null) {
-            return false;
-        }
-        String worn = textureUuid.replace("-", "").toLowerCase();
-
-        String cur = name;
-        int guard = 0;
-        while (cur != null && guard++ < 100) {
-            String uuid = layerUuidOf(cur);
-            if (uuid != null && !uuid.equals(worn)) {
-                return true;
-            }
-            cur = parentOf(cur, geo);
-        }
-        return false;
+        float hue = (System.currentTimeMillis() % durationMs) / (float) durationMs;
+        float h = hue * 6f;
+        int sector = (int) h;
+        float f = h - sector;
+        float q = 1f - f;
+        return switch (sector % 6) {
+            case 0 -> new float[]{1f, f, 0f};
+            case 1 -> new float[]{q, 1f, 0f};
+            case 2 -> new float[]{0f, 1f, f};
+            case 3 -> new float[]{0f, q, 1f};
+            case 4 -> new float[]{f, 0f, 1f};
+            default -> new float[]{1f, 0f, q};
+        };
     }
 
     private static int packColor(float[] rgb) {
@@ -369,17 +597,15 @@ public final class CosmeticColorRenderer {
     /**
      * VertexConsumer-Huelle, die alles unveraendert durchreicht - AUSSER der Normale:
      * die wird auf einen festen Wert (0,1,0) gezwungen. Wirkung: Minecrafts
-     * richtungsabhaengige Schattierung (Diffuse) wird ueber das ganze Modell konstant
-     * und reagiert nicht mehr auf die Model-Drehung (Sneak-Neigung liess die Farben
-     * sonst abdunkeln). Die Lichtkarte (Umgebungshelligkeit) laeuft ueber setUv2 und
-     * bleibt unangetastet - Hoehle/Nacht dunkeln also weiterhin normal.
-     *
-     * Nur fuer Durchgang A (Basisfarbe). Der Glow-Pass ist emissiv und ohnehin
-     * schattierungsfrei.
-     *
-     * Wichtig: die durchreichenden Methoden geben {@code this} (die Huelle) zurueck,
-     * nicht das Delegate - sonst braeche die Aufruf-Kette aus der Huelle aus und
-     * setNormal wuerde nicht mehr abgefangen.
+     * richtungsabhaengige Schattierung wird ueber das ganze Modell konstant und
+     * reagiert nicht mehr auf die Model-Drehung (Sneak-Neigung liess die Farben
+     * sonst abdunkeln). Die Lichtkarte laeuft ueber setUv2 und bleibt unangetastet.
+     * <p>
+     * Die durchreichenden Methoden geben {@code this} zurueck, nicht das Delegate -
+     * sonst braeche die Aufruf-Kette aus der Huelle aus.
+     * <p>
+     * 1.21.1: Methodensatz wie in der bisherigen NeoForge-Version. Falls der Compiler hier eine fehlende abstrakte Methode meldet, hat
+     * Mojang VertexConsumer erweitert - einfach durchreichen wie die anderen.
      */
     private record FlatNormalConsumer(VertexConsumer delegate) implements VertexConsumer {
         @Override

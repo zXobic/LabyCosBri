@@ -18,6 +18,7 @@
 package com.example.labycosmetics;
 
 import com.example.labycosmetics.render.LabyCapeLayer;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
@@ -33,8 +34,13 @@ import org.slf4j.LoggerFactory;
  * (inoffizielle, aber oeffentlich dokumentierte) LabyMod-API ab und rendert
  * sie zusaetzlich zum normalen Spieler-Modell, ohne dass der LabyMod-Client
  * selbst installiert sein muss.
+ * <p>
+ * {@code dist = Dist.CLIENT}: Auf einem dedizierten Server wird die Mod gar nicht
+ * erst geladen. Ohne das wuerde der Konstruktor dort Client-Klassen anfassen
+ * (Render-Events, PlayerRenderer) und der Server abstuerzen, falls jemand die Mod
+ * versehentlich in den Server-mods-Ordner legt.
  */
-@Mod(LabyCosmeticsMod.MOD_ID)
+@Mod(value = LabyCosmeticsMod.MOD_ID, dist = Dist.CLIENT)
 public class LabyCosmeticsMod {
 
     public static final String MOD_ID = "labycosbri";

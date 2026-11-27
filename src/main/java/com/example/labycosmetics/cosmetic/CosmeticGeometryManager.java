@@ -18,13 +18,11 @@
 package com.example.labycosmetics.cosmetic;
 
 import com.example.labycosmetics.LabyCosmeticsMod;
+import com.example.labycosmetics.api.Http;
+import com.example.labycosmetics.api.LoadTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.geom.ModelPart;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,14 +38,7 @@ public final class CosmeticGeometryManager {
 
     private static final String GEO_URL = "https://dl.labymod.net/cosmetics/%d/geo.json";
 
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-
-    private enum State { LOADING, LOADED, FAILED }
-
-    private static final Map<Integer, State> STATE = new ConcurrentHashMap<>();
+    private static final LoadTracker<Integer> STATE = new LoadTracker<>();
     private static final Map<Integer, BuiltCosmeticModel> MODELS = new ConcurrentHashMap<>();
 
     private CosmeticGeometryManager() {
@@ -59,47 +50,46 @@ public final class CosmeticGeometryManager {
      * vorerst {@code null} zurueck.
      */
     public static BuiltCosmeticModel getModel(int cosmeticId) {
-        State s = STATE.get(cosmeticId);
-        if (s == null) {
-            STATE.put(cosmeticId, State.LOADING);
+        if (STATE.tryStart(cosmeticId)) {
             requestGeo(cosmeticId);
             return null;
         }
-        return s == State.LOADED ? MODELS.get(cosmeticId) : null;
+        return STATE.isLoaded(cosmeticId) ? MODELS.get(cosmeticId) : null;
     }
 
     private static void requestGeo(int cosmeticId) {
         String url = GEO_URL.formatted(cosmeticId);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(10))
-                .GET()
-                .build();
-
-        CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+        Http.getString(url, Duration.ofSeconds(10))
                 .thenAccept(response -> {
+                    if (response.statusCode() == 404) {
+                        STATE.absent(cosmeticId);
+                        return;
+                    }
                     if (response.statusCode() != 200) {
                         LabyCosmeticsMod.LOGGER.info(
                                 "[LabyCosmetics] geo.json fuer Cosmetic {} lieferte Status {}",
                                 cosmeticId, response.statusCode());
-                        STATE.put(cosmeticId, State.FAILED);
+                        STATE.failed(cosmeticId);
                         return;
                     }
 
                     final String body = response.body();
+                    // Bauen auf dem Render-Thread: ModelPart-Objekte werden dort
+                    // gelesen, so gibt es kein halbfertiges Modell.
                     Minecraft.getInstance().execute(() -> {
                         try {
                             BedrockGeometry geo = BedrockGeometryParser.parse(body);
                             ModelPart model = BedrockModelBuilder.build(geo);
                             Map<String, ModelPart> bones = ModelPartIndex.build(model, geo);
                             MODELS.put(cosmeticId, new BuiltCosmeticModel(model, bones, geo));
-                            STATE.put(cosmeticId, State.LOADED);
+                            STATE.loaded(cosmeticId);
                         } catch (Exception e) {
+                            // Kaputte Datei wird nicht besser - nicht neu laden.
                             LabyCosmeticsMod.LOGGER.warn(
                                     "[LabyCosmetics] geo.json fuer Cosmetic {} nicht baubar: {}",
                                     cosmeticId, e.getMessage());
-                            STATE.put(cosmeticId, State.FAILED);
+                            STATE.absent(cosmeticId);
                         }
                     });
                 })
@@ -107,7 +97,7 @@ public final class CosmeticGeometryManager {
                     LabyCosmeticsMod.LOGGER.warn(
                             "[LabyCosmetics] geo.json-Abruf fuer Cosmetic {} fehlgeschlagen: {}",
                             cosmeticId, t.getMessage());
-                    STATE.put(cosmeticId, State.FAILED);
+                    STATE.failed(cosmeticId);
                     return null;
                 });
     }

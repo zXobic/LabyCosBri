@@ -18,6 +18,8 @@
 package com.example.labycosmetics.client;
 
 import com.example.labycosmetics.LabyCosmeticsMod;
+import com.example.labycosmetics.api.Http;
+import com.example.labycosmetics.api.LoadTracker;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -25,10 +27,6 @@ import net.minecraft.resources.ResourceLocation;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,12 +41,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h3>Animierte Texturen (Sprite-Sheets)</h3>
  * Manche Cosmetics liefern die Textur als vertikal gestapeltes Sprite-Sheet
- * (viele quadratische Frames untereinander, z.B. 963 Cyber Wings: 128x5120 =
- * 40 Frames a 128x128). LabyMod spielt diese Frames ab; belegt am Gold von 963,
- * das in LabyMod pulsiert, weil nur die Gold-Region ueber die Frames variiert.
- * Der Katalog liefert KEINE Frame-Dauer (textureAnimationDelay ist leer) - die
- * Animation ist rein texturform-getrieben, LabyMod nutzt eine feste Default-
- * Kadenz. Siehe {@link #FRAME_DELAY_MS}.
+ * (viele Frames untereinander, z.B. 963 Cyber Wings: 128x5120 = 40 Frames
+ * a 128x128). Der Katalog liefert KEINE Frame-Dauer - siehe {@link #FRAME_DELAY_MS}.
+ *
+ * <h3>Neu</h3>
+ * Fehlgeschlagene Downloads werden mit Abstand neu versucht (LoadTracker),
+ * 404 gilt als "gibt es nicht". Abruf ueber den gemeinsamen {@link Http}-Client.
  */
 public final class CosmeticTextureManager {
 
@@ -58,35 +56,18 @@ public final class CosmeticTextureManager {
      * Millisekunden pro Frame bei animierten Texturen. LabyMod gibt im Katalog
      * keinen Wert her (textureAnimationDelay leer), nutzt also einen internen
      * Default. 100 ms/Frame passt zur Beobachtung an 963 (40 Frames -> 4 s pro
-     * Durchlauf, "Pulsieren ueber Sekunden") und zum textureAnimationDelay-
-     * Beispielwert der API-Doku. Bei sichtbarem Tempo-Unterschied gegen LabyMod:
+     * Durchlauf). Bei sichtbarem Tempo-Unterschied gegen LabyMod:
      * Pulsperiode in LabyMod messen und durch die Frame-Anzahl teilen.
      */
     private static final long FRAME_DELAY_MS = 100L;
 
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
-
-    private enum State { LOADING, LOADED, NONE }
+    private static final LoadTracker<String> STATE = new LoadTracker<>();
 
     /**
      * Cache-Eintrag. {@code animated} ist nur bei Sprite-Sheets gesetzt und
      * blaettert die {@code texture} pro Render weiter; sonst {@code null}.
      */
-    private record Entry(State state, ResourceLocation texture, Animated animated) {
-        static Entry loading() {
-            return new Entry(State.LOADING, null, null);
-        }
-
-        static Entry none() {
-            return new Entry(State.NONE, null, null);
-        }
-
-        static Entry loaded(ResourceLocation texture, Animated animated) {
-            return new Entry(State.LOADED, texture, animated);
-        }
+    private record Entry(ResourceLocation texture, Animated animated) {
     }
 
     private static final Map<String, Entry> CACHE = new ConcurrentHashMap<>();
@@ -99,24 +80,22 @@ public final class CosmeticTextureManager {
      * sonst {@code null} (und stoesst einmalig das Laden an).
      * <p>
      * Bei animierten Texturen wird hier der zur Zeit passende Frame in die
-     * DynamicTexture geschrieben. Der Aufruf kommt aus WingRenderLayer.render,
-     * also aus dem Render-Thread - nur dort ist {@code upload()} erlaubt.
+     * DynamicTexture geschrieben. Der Aufruf kommt aus CosmeticRenderLayer.render,
+     * also vom Render-Thread - nur dort ist {@code upload()} erlaubt.
      *
      * @param textureDirectory z.B. "1460"
      * @param textureUuid       z.B. "875b4b5a-818e-4a9e-833e-f8ddcf2e7398" (mit Bindestrichen)
      */
     public static ResourceLocation getTexture(String textureDirectory, String textureUuid,
-                                              int frameAspectWidth, int frameAspectHeight) {
+                                        int frameAspectWidth, int frameAspectHeight) {
         String cacheKey = textureDirectory + "/" + textureUuid;
-        Entry entry = CACHE.get(cacheKey);
-
-        if (entry == null) {
-            CACHE.put(cacheKey, Entry.loading());
+        if (STATE.tryStart(cacheKey)) {
             requestTexture(textureDirectory, textureUuid, cacheKey,
                     frameAspectWidth, frameAspectHeight);
             return null;
         }
-        if (entry.state() != State.LOADED) {
+        Entry entry = STATE.isLoaded(cacheKey) ? CACHE.get(cacheKey) : null;
+        if (entry == null) {
             return null;
         }
         if (entry.animated() != null) {
@@ -129,18 +108,16 @@ public final class CosmeticTextureManager {
                                        int frameAspectWidth, int frameAspectHeight) {
         String url = TEXTURE_URL.formatted(dir, uuid);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(8))
-                .GET()
-                .build();
-
-        CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
+        Http.getBytes(url, Duration.ofSeconds(8))
                 .thenAccept(response -> {
+                    if (response.statusCode() == 404) {
+                        STATE.absent(cacheKey);
+                        return;
+                    }
                     if (response.statusCode() != 200) {
                         LabyCosmeticsMod.LOGGER.warn(
                                 "[LabyCosmetics] Textur {} lieferte Status {}", url, response.statusCode());
-                        CACHE.put(cacheKey, Entry.none());
+                        STATE.failed(cacheKey);
                         return;
                     }
 
@@ -151,21 +128,14 @@ public final class CosmeticTextureManager {
                         LabyCosmeticsMod.LOGGER.warn(
                                 "[LabyCosmetics] Textur {} konnte nicht dekodiert werden: {}",
                                 url, e.getMessage());
-                        CACHE.put(cacheKey, Entry.none());
+                        STATE.absent(cacheKey);
                         return;
                     }
 
-                    // Sprite-Sheet-Erkennung: Manche Cosmetics haben animierte
-                    // Texturen - viele quadratische Frames untereinander gestapelt
-                    // (z.B. 128x5120 = 40 Frames a 128x128). Ein normales Sheet ist
-                    // etwa quadratisch. Ist die Hoehe deutlich groesser als die
-                    // Breite (>= 2x), behandeln wir es als Sprite-Sheet und spielen
-                    // die Frames ab (Frame 0 zuerst, dann per advance() weiter).
-                    // Frame-GROESSE aus dem Katalog-Seitenverhaeltnis ableiten, NICHT
-                    // quadratisch annehmen: Frame ist so breit wie das Sheet, die Hoehe
-                    // ergibt sich aus frame_aspect_ratio. 963 -> 1:1 -> 128x128;
-                    // 1784 -> 128:64 -> 128x64; 493 -> 35:27 -> 140x108. "Quadratisch"
-                    // wuerde 493 und 1784 falsch zerschneiden.
+                    // Sprite-Sheet-Erkennung: Frame ist so breit wie das Sheet, die
+                    // Hoehe ergibt sich aus frame_aspect_ratio. 963 -> 1:1 -> 128x128;
+                    // 1784 -> 128:64 -> 128x64; 493 -> 35:27 -> 140x108.
+                    // Ist das Sheet mindestens 2 Frames hoch, spielen wir es ab.
                     final int frameWidth  = image.getWidth();
                     final int frameHeight = Math.max(1, frameWidth * frameAspectHeight / frameAspectWidth);
                     if (image.getHeight() >= frameHeight * 2) {
@@ -176,10 +146,11 @@ public final class CosmeticTextureManager {
                             DynamicTexture tex = new DynamicTexture(frame0);
                             ResourceLocation loc = registerTexture(dir, uuid, tex);
                             Animated anim = new Animated(sheet, tex, frameCount, frameWidth, frameHeight);
-                            CACHE.put(cacheKey, Entry.loaded(loc, anim));
+                            CACHE.put(cacheKey, new Entry(loc, anim));
+                            STATE.loaded(cacheKey);
                         });
                         LabyCosmeticsMod.LOGGER.debug(
-                                "[LabyCosmetics] Animierte Textur ({}): {} Frames a {}x{}px, Frame-Animation aktiv.",
+                                "[LabyCosmetics] Animierte Textur ({}): {} Frames a {}x{}px.",
                                 url, frameCount, frameWidth, frameHeight);
                         return;
                     }
@@ -188,13 +159,14 @@ public final class CosmeticTextureManager {
                     Minecraft.getInstance().execute(() -> {
                         DynamicTexture tex = new DynamicTexture(finalImage);
                         ResourceLocation loc = registerTexture(dir, uuid, tex);
-                        CACHE.put(cacheKey, Entry.loaded(loc, null));
+                        CACHE.put(cacheKey, new Entry(loc, null));
+                        STATE.loaded(cacheKey);
                     });
                 })
                 .exceptionally(t -> {
                     LabyCosmeticsMod.LOGGER.warn(
                             "[LabyCosmetics] Textur-Abruf {} fehlgeschlagen: {}", url, t.getMessage());
-                    CACHE.put(cacheKey, Entry.none());
+                    STATE.failed(cacheKey);
                     return null;
                 });
     }
@@ -203,15 +175,12 @@ public final class CosmeticTextureManager {
     private static ResourceLocation registerTexture(String dir, String uuid, DynamicTexture tex) {
         ResourceLocation loc = ResourceLocation.fromNamespaceAndPath(
                 LabyCosmeticsMod.MOD_ID,
-                "cosmetic/" + dir + "_" + uuid.replace("-", ""));
+                "cosmetic/" + dir + "_" + uuid.replace("-", "").toLowerCase(java.util.Locale.ROOT));
         Minecraft.getInstance().getTextureManager().register(loc, tex);
         return loc;
     }
 
-    /**
-     * Kopiert einen quadratischen Frame (Kantenlaenge {@code size}) aus einem
-     * vertikalen Sprite-Sheet in ein NEUES NativeImage.
-     */
+    /** Kopiert Frame {@code frame} aus einem vertikalen Sprite-Sheet in ein NEUES NativeImage. */
     private static NativeImage extractFrame(NativeImage sheet, int frame, int w, int h) {
         NativeImage out = new NativeImage(w, h, false);
         blitFrame(sheet, frame, w, h, out);
@@ -231,8 +200,11 @@ public final class CosmeticTextureManager {
     /**
      * Haelt ein vertikales Sprite-Sheet und stellt die zugehoerige
      * DynamicTexture bei jedem Aufruf auf den zur Wall-Clock-Zeit passenden
-     * Frame. Wall-Clock statt Game-Ticks: so laufen alle Betrachter synchron
-     * und unabhaengig von der Tickrate.
+     * Frame. Wall-Clock statt Game-Ticks: so laufen alle Betrachter synchron.
+     * <p>
+     * Hinweis: {@code sheet} wird nie geschlossen (nativer Speicher). Okay,
+     * solange der Cache nie geleert wird - bei einem spaeteren Cache-Reset
+     * hier {@code sheet.close()} nachziehen.
      */
     private static final class Animated {
         private final NativeImage sheet;
@@ -251,11 +223,7 @@ public final class CosmeticTextureManager {
             this.frameHeight = frameHeight;
         }
 
-        /**
-         * Auf den aktuellen Frame stellen und nur bei Wechsel hochladen. Muss im
-         * Render-Thread laufen (upload() spricht GL an) - Aufruf kommt aus
-         * getTexture, also aus WingRenderLayer.render.
-         */
+        /** Auf den aktuellen Frame stellen und nur bei Wechsel hochladen (Render-Thread). */
         void advance() {
             int frame = (int) ((System.currentTimeMillis() / FRAME_DELAY_MS) % frameCount);
             if (frame == lastFrame) {

@@ -18,19 +18,18 @@
 package com.example.labycosmetics.cosmetic;
 
 import com.example.labycosmetics.LabyCosmeticsMod;
+import com.example.labycosmetics.api.Http;
+import com.example.labycosmetics.api.LoadTracker;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -42,15 +41,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *   { "c": [ { "i": 1460, "d": ["875b4b5a-...","8c8989","aaaaaa",...] }, ... ] }
  * wobei "i" die Cosmetic-ID ist und "d" die getragenen Daten
  * (erste Eintraege je nach Typ: Textur-UUID, dann Farben etc.).
+ * <p>
+ * 404 = kein LabyMod-Nutzer -> bis zum naechsten Join nicht neu fragen.
+ * Timeout/5xx -> mit Abstand neu versuchen (siehe {@link LoadTracker}).
  */
 public final class UserCosmeticsManager {
 
     private static final String USERDATA_URL = "https://dl.labymod.net/userdata/%s.json";
-
-    private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
 
     /** Ein getragenes Cosmetic: die ID und die zugehoerigen Daten (d-Array). */
     public record WornCosmetic(int id, List<String> data) {
@@ -60,9 +57,7 @@ public final class UserCosmeticsManager {
         }
     }
 
-    private enum State { LOADING, LOADED, FAILED }
-
-    private static final Map<UUID, State> STATE = new ConcurrentHashMap<>();
+    private static final LoadTracker<UUID> STATE = new LoadTracker<>();
     // Pro Spieler: Map von Cosmetic-ID -> WornCosmetic (schneller Zugriff nach ID)
     private static final Map<UUID, Map<Integer, WornCosmetic>> WORN = new ConcurrentHashMap<>();
 
@@ -70,10 +65,9 @@ public final class UserCosmeticsManager {
     }
 
     /**
-     * Verwirft alle geladenen Trage-Daten. Der naechste getWorn/
-     * findWornByCategory-Aufruf stoesst dann pro Spieler ein frisches Laden
-     * an. Wird beim Server-Join gerufen, damit nach einem (Re)Connect der
-     * aktuelle Trage-Zustand gilt statt eines eingefrorenen von vorher.
+     * Verwirft alle geladenen Trage-Daten. Der naechste Zugriff stoesst dann
+     * pro Spieler ein frisches Laden an. Wird beim Server-Join gerufen, damit
+     * nach einem (Re)Connect der aktuelle Trage-Zustand gilt.
      */
     public static void invalidateAll() {
         STATE.clear();
@@ -81,52 +75,22 @@ public final class UserCosmeticsManager {
         LabyCosmeticsMod.LOGGER.info("[LabyCosmetics] Trage-Cache geleert (Server-Join).");
     }
 
-    /**
-     * Gibt das getragene Cosmetic dieser ID zurueck, falls der Spieler es
-     * traegt und die Daten schon geladen sind. Stoesst andernfalls einmalig
-     * das Laden an und gibt vorerst {@code null} zurueck.
-     */
-    public static WornCosmetic getWorn(UUID playerUuid, int cosmeticId) {
-        State state = STATE.get(playerUuid);
-        if (state == null) {
-            STATE.put(playerUuid, State.LOADING);
+    /** Liefert die Trage-Map des Spielers, falls geladen; stoesst sonst das Laden an. */
+    private static Map<Integer, WornCosmetic> wornMap(UUID playerUuid) {
+        if (STATE.tryStart(playerUuid)) {
             requestUserData(playerUuid);
             return null;
         }
-        if (state != State.LOADED) {
-            return null;
-        }
-        Map<Integer, WornCosmetic> map = WORN.get(playerUuid);
-        return map == null ? null : map.get(cosmeticId);
+        return STATE.isLoaded(playerUuid) ? WORN.get(playerUuid) : null;
     }
 
     /**
-     * Sucht unter den getragenen Cosmetics des Spielers das erste, dessen
-     * Katalog-Kategorie der gesuchten entspricht (z.B. "WING"). Gibt die
-     * Cosmetic-ID zurueck oder {@code null}, wenn nichts passendes getragen
-     * wird bzw. die Daten (userdata oder Katalog) noch nicht geladen sind.
+     * Gibt das getragene Cosmetic dieser ID zurueck, falls der Spieler es
+     * traegt und die Daten schon geladen sind, sonst {@code null}.
      */
-    public static Integer findWornByCategory(UUID playerUuid, String category) {
-        State state = STATE.get(playerUuid);
-        if (state == null) {
-            STATE.put(playerUuid, State.LOADING);
-            requestUserData(playerUuid);
-            return null;
-        }
-        if (state != State.LOADED) {
-            return null;
-        }
-        Map<Integer, WornCosmetic> map = WORN.get(playerUuid);
-        if (map == null) {
-            return null;
-        }
-        for (Integer id : map.keySet()) {
-            CosmeticCatalog.CosmeticMeta meta = CosmeticCatalog.get(id);
-            if (meta != null && category.equals(meta.category())) {
-                return id;
-            }
-        }
-        return null;
+    public static WornCosmetic getWorn(UUID playerUuid, int cosmeticId) {
+        Map<Integer, WornCosmetic> map = wornMap(playerUuid);
+        return map == null ? null : map.get(cosmeticId);
     }
 
     /**
@@ -134,21 +98,12 @@ public final class UserCosmeticsManager {
      * liegt. Fuer Layer, die mehrere Cosmetics gleichzeitig rendern (Wing + Aura + ...).
      * Leere Liste, solange die Daten noch laden.
      */
-    public static java.util.List<Integer> findAllWornByCategories(UUID playerUuid, java.util.Set<String> categories) {
-        State state = STATE.get(playerUuid);
-        if (state == null) {
-            STATE.put(playerUuid, State.LOADING);
-            requestUserData(playerUuid);
-            return java.util.List.of();
-        }
-        if (state != State.LOADED) {
-            return java.util.List.of();
-        }
-        Map<Integer, WornCosmetic> map = WORN.get(playerUuid);
+    public static List<Integer> findAllWornByCategories(UUID playerUuid, Set<String> categories) {
+        Map<Integer, WornCosmetic> map = wornMap(playerUuid);
         if (map == null) {
-            return java.util.List.of();
+            return List.of();
         }
-        java.util.List<Integer> result = new java.util.ArrayList<>();
+        List<Integer> result = new ArrayList<>();
         for (Integer id : map.keySet()) {
             CosmeticCatalog.CosmeticMeta meta = CosmeticCatalog.get(id);
             if (meta != null && categories.contains(meta.category())) {
@@ -161,34 +116,33 @@ public final class UserCosmeticsManager {
     private static void requestUserData(UUID playerUuid) {
         String url = USERDATA_URL.formatted(playerUuid.toString());
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(8))
-                .GET()
-                .build();
-
-        CLIENT.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+        Http.getString(url, Duration.ofSeconds(8))
                 .thenAccept(response -> {
+                    if (response.statusCode() == 404) {
+                        // kein LabyMod-Nutzer - kein Fehler, nicht neu fragen
+                        STATE.absent(playerUuid);
+                        return;
+                    }
                     if (response.statusCode() != 200) {
                         LabyCosmeticsMod.LOGGER.info(
-                                "[LabyCosmetics] userdata fuer {} lieferte Status {} (evtl. kein LabyMod-Nutzer)",
+                                "[LabyCosmetics] userdata fuer {} lieferte Status {}",
                                 playerUuid, response.statusCode());
-                        STATE.put(playerUuid, State.FAILED);
+                        STATE.failed(playerUuid);
                         return;
                     }
                     try {
                         parseAndStore(playerUuid, response.body());
-                        STATE.put(playerUuid, State.LOADED);
+                        STATE.loaded(playerUuid);
                     } catch (Exception e) {
                         LabyCosmeticsMod.LOGGER.warn(
                                 "[LabyCosmetics] userdata fuer {} nicht lesbar: {}", playerUuid, e.getMessage());
-                        STATE.put(playerUuid, State.FAILED);
+                        STATE.failed(playerUuid);
                     }
                 })
                 .exceptionally(t -> {
                     LabyCosmeticsMod.LOGGER.warn(
                             "[LabyCosmetics] userdata-Abruf fuer {} fehlgeschlagen: {}", playerUuid, t.getMessage());
-                    STATE.put(playerUuid, State.FAILED);
+                    STATE.failed(playerUuid);
                     return null;
                 });
     }
@@ -206,7 +160,7 @@ public final class UserCosmeticsManager {
                 List<String> data = new ArrayList<>();
                 if (obj.has("d") && obj.get("d").isJsonArray()) {
                     for (JsonElement d : obj.getAsJsonArray("d")) {
-                        data.add(d.getAsString());
+                        data.add(d.isJsonNull() ? null : d.getAsString());
                     }
                 }
                 worn.put(id, new WornCosmetic(id, data));
@@ -214,7 +168,7 @@ public final class UserCosmeticsManager {
         }
 
         WORN.put(playerUuid, worn);
-        LabyCosmeticsMod.LOGGER.info(
+        LabyCosmeticsMod.LOGGER.debug(
                 "[LabyCosmetics] {} traegt {} Cosmetics.", playerUuid, worn.size());
     }
 }

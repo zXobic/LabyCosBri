@@ -96,7 +96,7 @@ public final class BedrockGeometryParser {
                     if (cubeObj.has("rotation")) {
                         cube.hasRotation = true;
                         cube.rotation = toFloatArray(cubeObj.getAsJsonArray("rotation"));
-                        // Cube-Pivot: falls angegeben, sonst Fallback auf origin-Mitte
+                        // Cube-Pivot: falls angegeben, sonst Fallback auf origin (Ecke, nicht Mitte)
                         if (cubeObj.has("pivot")) {
                             cube.pivot = toFloatArray(cubeObj.getAsJsonArray("pivot"));
                         } else {

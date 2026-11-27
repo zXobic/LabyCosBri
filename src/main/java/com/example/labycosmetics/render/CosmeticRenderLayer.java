@@ -24,6 +24,7 @@ import com.example.labycosmetics.cosmetic.BuiltCosmeticModel;
 import com.example.labycosmetics.cosmetic.CosmeticAnimationManager;
 import com.example.labycosmetics.cosmetic.CosmeticCatalog;
 import com.example.labycosmetics.cosmetic.CosmeticColorRenderer;
+import com.example.labycosmetics.cosmetic.CosmeticData;
 import com.example.labycosmetics.cosmetic.CosmeticGeometryManager;
 import com.example.labycosmetics.cosmetic.UserCosmeticsManager;
 import com.example.labycosmetics.cosmetic.CosmeticAnimationController;
@@ -32,11 +33,12 @@ import com.mojang.math.Axis;
 import net.minecraft.client.model.PlayerModel;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.entity.RenderLayerParent;
 import net.minecraft.client.renderer.entity.layers.RenderLayer;
 import net.minecraft.resources.ResourceLocation;
+import net.neoforged.fml.loading.FMLEnvironment;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -47,22 +49,30 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
 
     /**
      * TEST: feste Cosmetic-IDs statt der getragenen; Texturen dann aus meta.defaultData().
-     * LEER = aus (Normalbetrieb). Fuer den Dev-Client, der keine getragenen Cosmetics
-     * kennt (Offline-UUID -> userdata 404). Mehrere IDs = Mehrfach-Rendering testen,
-     * z.B. List.of(1460, 328, 1) fuer Angel Wings V2 + Leaves Aura + Tail.
-     * ACHTUNG vor Release wieder leeren - sonst tragen ALLE Spieler diese Cosmetics.
+     * Fuer den Dev-Client, der keine getragenen Cosmetics kennt (Offline-UUID ->
+     * userdata 404). Kommt aus der System-Property {@code labycosbri.testIds}
+     * (kommagetrennt, z.B. "1460,328,1"), die die Run-Config in build.gradle setzt.
+     * <p>
+     * Wirkt NUR in der Entwicklungsumgebung ({@code ./gradlew runClient}). Im
+     * ausgelieferten Jar ist {@code FMLEnvironment.production} true und die Property
+     * wird ignoriert - auch wenn jemand sie per JVM-Argument setzt. Vorher stand
+     * {@code List.of(1369)} als Konstante im Code und musste vor jedem Release
+     * von Hand geleert werden.
      */
-    private static final List<Integer> TEST_COSMETIC_IDS = List.of();
+    private static final List<Integer> TEST_COSMETIC_IDS = !FMLEnvironment.production
+            ? parseTestIds(System.getProperty("labycosbri.testIds"))
+            : List.of();
 
     
     //TEST: Animation aus -> Ruhe-Geometrie. Fuer den Vergleich gegen Blockbench
     private static final boolean TEST_NO_ANIMATION = false;
 
-    /** Kategorien, die dieser Layer rendert. Alle ausser HAT haengen am Koerper;
-     *  HAT hat eine eigene Pose (applyHeadPose). UNDERGLOW belegt an 728 (FEET)
-     *  und 1307 (BACK). */
+    /** Kategorien, die dieser Layer rendert. UNDERGLOW belegt an 728 (FEET) und
+     *  1307 (BACK). HEADGEAR (z.B. Halo 9) und FACE (Masken) neu nach Katalog-Scan.
+     *  Ob Kopf- oder Koerper-Pose, entscheidet NICHT die Kategorie, sondern
+     *  {@code attached_to} (siehe renderOne). */
     private static final java.util.Set<String> SUPPORTED_CATEGORIES =
-            java.util.Set.of("WING", "AURA", "BACK", "HAT", "UNDERGLOW");
+            java.util.Set.of("WING", "AURA", "BACK", "HAT", "HEADGEAR", "FACE", "UNDERGLOW");
 
     /** GEMESSEN (Live-Justierung im Dev-Client): 0. Der Layer-Ursprung liegt bereits
      *  am Kopf-Drehpunkt - es braucht keinen Versatz vor der Drehung. Entscheidend
@@ -153,13 +163,21 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
             return;
         }
 
-        // Getragene Daten, sonst die Standard-Daten aus dem Katalog (Test-Modus).
-        var worn = UserCosmeticsManager.getWorn(player.getUUID(), cosmeticId);
-        List<String> data = (worn != null) ? worn.data() : meta.defaultData();
-        if (data == null || data.isEmpty()) {
+        // ARM/LEG brauchen die Pose der Gliedmassen - noch nicht unterstuetzt.
+        boolean head = meta.attachedToHead();
+        if (!head && meta.attachedTo() != null && !"BODY".equals(meta.attachedTo())) {
             return;
         }
-        String textureUuid = data.get(0);
+
+        // Getragene Daten, sonst die Standard-Daten aus dem Katalog (Test-Modus).
+        // Die Bedeutung jedes Eintrags steht in meta.options() - siehe CosmeticData.
+        // Frueher galt fest: data[0] Textur, ab data[1] Farben. Bei Cosmetics mit
+        // offset-Option (113 Stueck, z.B. Halo 9, 1460) wurde der Offset dann als
+        // Farbe gelesen.
+        var worn = UserCosmeticsManager.getWorn(player.getUUID(), cosmeticId);
+        List<String> data = (worn != null) ? worn.data() : meta.defaultData();
+        CosmeticData parsed = CosmeticData.parse(meta.options(), data);
+        String textureUuid = parsed.textureUuid();
         if (textureUuid == null) {
             return;
         }
@@ -202,13 +220,20 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         // --- Rendern ---
         poseStack.pushPose();
 
-        // Pose nach Befestigungspunkt: Huete folgen dem Kopf (Yaw/Pitch), alles
-        // andere haengt am Koerper. Der Rest der Methode ist fuer beide gleich.
-        boolean head = "HAT".equals(meta.category());
+        // Pose nach Befestigungspunkt (attached_to): Kopf-Cosmetics (Huete, Halo,
+        // Masken) folgen Yaw/Pitch, alles andere haengt am Koerper. Katalog-Scan:
+        // alle HAT und FACE und 66 von 68 HEADGEAR sind HEAD.
         if (head) {
             applyHeadPose(poseStack, player, netHeadYaw, headPitch);
         } else {
             applyBodyPose(poseStack, player);
+        }
+        // Vom Spieler eingestellter Offset (offset-Option, z.B. Halo-Hoehe: Bereich
+        // y=-1..3 laut option_list "offset[y=-1<3]").
+        // ANNAHME: Einheit Pixel (1/16 Block), +y = nach oben. Modellraum hat Y nach
+        // unten, daher das Minus. Bei falscher Richtung/Groesse hier kalibrieren.
+        if (parsed.hasOffset()) {
+            poseStack.translate(parsed.offsetX() / 16.0D, -parsed.offsetY() / 16.0D, parsed.offsetZ() / 16.0D);
         }
         // Scale direkt aus dem Katalog, OHNE Grundfaktor. Der frueher feste
         // 0.8er-Faktor war keine Regel, sondern 1460s Animations-Scale - den
@@ -217,31 +242,10 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         float scale = meta.scale();
         poseStack.scale(scale, scale, scale);
 
-        var consumer = buffer.getBuffer(RenderType.entityTranslucent(texture));
-
-        // data[0] ist die Textur-UUID, ab data[1] die Farben fuer color_0, color_1, ...
-        String hex0 = colorAt(data, 1);
-        String hex1 = colorAt(data, 2);
-        String hex2 = colorAt(data, 3);
-        String hex3 = colorAt(data, 4);
-
-        float[] color0 = CosmeticColorRenderer.hexToRgb(hex0);
-        float[] color1 = CosmeticColorRenderer.hexToRgb(hex1);
-        float[] color2 = hex2 != null ? CosmeticColorRenderer.hexToRgb(hex2) : null;
-        float[] color3 = hex3 != null ? CosmeticColorRenderer.hexToRgb(hex3) : null;
-
-        // Rest-Farbe fuer nicht-color-Teile (glow, blade, middlepart, ...): die letzte
-        // tatsaechlich vorhandene Farbe (idR. die Leuchtfarbe).
-        float[] restColor;
-        if (hex3 != null) {
-            restColor = color3;
-        } else if (hex2 != null) {
-            restColor = color2;
-        } else if (hex1 != null) {
-            restColor = color1;
-        } else {
-            restColor = color0;
-        }
+        // Klassifizierung (Farbe/Glow/Rainbow/Layer je Bone) ist gecacht - einmal pro
+        // Modell + Textur statt jeden Frame. Farben kommen in Reihenfolge aus CosmeticData.
+        CosmeticColorRenderer.Classification cls = CosmeticColorRenderer.classify(built, textureUuid);
+        CosmeticColorRenderer.Colors colors = CosmeticColorRenderer.Colors.fromColors(parsed.colors());
 
         // Umgebungslicht stabil auf STEH-Augenhoehe sampeln, nicht auf der gesneakten:
         // Vanilla sampelt an Fuss + Augenhoehe*0.7; beim Ducken sinkt die Augenhoehe,
@@ -252,17 +256,29 @@ public class CosmeticRenderLayer extends RenderLayer<AbstractClientPlayer, Playe
         int stableLight = net.minecraft.client.renderer.LevelRenderer.getLightColor(
                 player.level(), player.blockPosition().above());
 
-        CosmeticColorRenderer.renderColored(poseStack, consumer, stableLight,
-                built.root(), built.bonesByName(), built.geometry(),
-                color0, color1, color2, color3, restColor,
-                buffer, texture, textureUuid);
+        CosmeticColorRenderer.render(poseStack, buffer, texture, stableLight, built, cls, colors);
 
         poseStack.popPose();
     }
 
-    /** Sicherer Zugriff auf ein Farb-Element im data-Array (oder null). */
-    private String colorAt(List<String> data, int index) {
-        return (data != null && index < data.size()) ? data.get(index) : null;
+    /** Liest die Test-IDs aus der System-Property (kommagetrennt). */
+    private static List<Integer> parseTestIds(String prop) {
+        if (prop == null || prop.isBlank()) {
+            return List.of();
+        }
+        List<Integer> ids = new ArrayList<>();
+        for (String part : prop.split(",")) {
+            try {
+                ids.add(Integer.parseInt(part.trim()));
+            } catch (NumberFormatException ignored) {
+                // ungueltige Eintraege ueberspringen
+            }
+        }
+        if (!ids.isEmpty()) {
+            com.example.labycosmetics.LabyCosmeticsMod.LOGGER.warn(
+                    "[LabyCosmetics] TESTMODUS aktiv: alle Spieler tragen {}", ids);
+        }
+        return List.copyOf(ids);
     }
 
 

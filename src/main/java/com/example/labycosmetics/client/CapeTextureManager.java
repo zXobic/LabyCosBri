@@ -19,6 +19,7 @@ package com.example.labycosmetics.client;
 
 import com.example.labycosmetics.LabyCosmeticsMod;
 import com.example.labycosmetics.api.LabyModApiClient;
+import com.example.labycosmetics.api.LoadTracker;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -37,12 +38,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class CapeTextureManager {
 
-    private enum State { NOT_REQUESTED, LOADING, LOADED, NONE, ERROR }
-
-    private record Entry(State state, ResourceLocation texture) {
-    }
-
-    private static final Map<UUID, Entry> CACHE = new ConcurrentHashMap<>();
+    /** Ladezustand pro Spieler, mit Neuversuch nach Fehlern (siehe LoadTracker). */
+    private static final LoadTracker<UUID> STATE = new LoadTracker<>();
+    private static final Map<UUID, ResourceLocation> TEXTURES = new ConcurrentHashMap<>();
 
     private CapeTextureManager() {
     }
@@ -60,49 +58,47 @@ public final class CapeTextureManager {
      * und ueberschreibt die alte Registrierung - kein wachsendes Leck.
      */
     public static void invalidateAll() {
-        CACHE.clear();
+        STATE.clear();
+        TEXTURES.clear();
         LabyCosmeticsMod.LOGGER.info("[LabyCosmetics] Cape-Cache geleert (Server-Join).");
     }
 
     /**
      * Gibt die ResourceLocation der Cape-Textur zurueck, falls bereits geladen.
-     * Stoesst andernfalls (einmalig) das Herunterladen an und gibt currently
-     * {@code null} zurueck, bis der Download abgeschlossen ist.
+     * Stoesst andernfalls das Herunterladen an (bzw. einen Neuversuch, wenn der
+     * letzte fehlgeschlagen ist) und gibt {@code null} zurueck.
      */
     public static ResourceLocation getCapeTexture(UUID playerUuid) {
-        Entry entry = CACHE.get(playerUuid);
-
-        if (entry == null) {
-            CACHE.put(playerUuid, new Entry(State.LOADING, null));
+        if (STATE.tryStart(playerUuid)) {
             requestCape(playerUuid);
             return null;
         }
-
-        return entry.state() == State.LOADED ? entry.texture() : null;
+        return STATE.isLoaded(playerUuid) ? TEXTURES.get(playerUuid) : null;
     }
 
     private static void requestCape(UUID playerUuid) {
-        LabyModApiClient.fetchCapeBytes(playerUuid).thenAccept(bytes -> {
-            if (bytes == null) {
-                CACHE.put(playerUuid, new Entry(State.NONE, null));
+        LabyModApiClient.fetchCape(playerUuid).thenAccept(result -> {
+            if (result.bytes() == null) {
+                // 404 = kein Cape -> nicht neu fragen; sonst spaeter erneut versuchen
+                if (result.absent()) {
+                    STATE.absent(playerUuid);
+                } else {
+                    STATE.failed(playerUuid);
+                }
                 return;
             }
 
             NativeImage image;
             try {
-                image = NativeImage.read(new ByteArrayInputStream(bytes));
+                image = NativeImage.read(new ByteArrayInputStream(result.bytes()));
             } catch (IOException e) {
                 LabyCosmeticsMod.LOGGER.warn(
                         "[LabyCosmetics] Konnte Cape-Bild fuer {} nicht dekodieren: {}",
                         playerUuid, e.getMessage());
-                CACHE.put(playerUuid, new Entry(State.ERROR, null));
+                STATE.absent(playerUuid);
                 return;
             }
 
-            // Muss auf dem Render-Thread passieren, da OpenGL-Texturen
-            // nicht thread-sicher erzeugt werden koennen. DynamicTexture
-            // uebernimmt danach den Besitz von "image" und schliesst es
-            // spaeter selbst (z.B. beim Neuladen von Ressourcen).
             Minecraft.getInstance().execute(() -> registerTexture(playerUuid, image));
         });
     }
@@ -113,6 +109,7 @@ public final class CapeTextureManager {
                 LabyCosmeticsMod.MOD_ID, "capes/" + playerUuid);
 
         Minecraft.getInstance().getTextureManager().register(location, texture);
-        CACHE.put(playerUuid, new Entry(State.LOADED, location));
+        TEXTURES.put(playerUuid, location);
+        STATE.loaded(playerUuid);
     }
 }

@@ -79,6 +79,19 @@ public final class BedrockModelBuilder {
             }
         }
 
+        // Bones, deren Parent nie auftaucht, bleiben uebrig und werden verworfen.
+        // Nicht still schlucken: sonst fehlen Teile ohne Hinweis im Log.
+        if (remaining > 0) {
+            for (int i = 0; i < geo.bones.size(); i++) {
+                if (!placed[i]) {
+                    BedrockGeometry.Bone b = geo.bones.get(i);
+                    com.example.labycosmetics.LabyCosmeticsMod.LOGGER.warn(
+                            "[LabyCosmetics] Bone '{}' verworfen: Parent '{}' existiert nicht.",
+                            b.name, b.parent);
+                }
+            }
+        }
+
         LayerDefinition layer = LayerDefinition.create(mesh, geo.textureWidth, geo.textureHeight);
         return layer.bakeRoot();
     }
